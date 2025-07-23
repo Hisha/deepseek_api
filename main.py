@@ -16,9 +16,9 @@ import json
 from json import JSONDecodeError
 
 try:
-    from json_repair import repair_json  # Optional: pip install json-repair
+    from json_repair import repair_json  # pip install json-repair (optional)
 except ImportError:
-    repair_json = None  # Skip if not installed
+    repair_json = None
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -80,7 +80,21 @@ def get_autotune_settings(prompt):
         "batch_size": str(batch_size)
     }
 
-# ----------------- FastAPI Routes -----------------
+def extract_json(text: str):
+    start = text.find("{")
+    if start == -1:
+        return None
+    brace_count = 0
+    for i, char in enumerate(text[start:], start=start):
+        if char == "{":
+            brace_count += 1
+        elif char == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                return text[start:i+1]
+    return None
+
+# ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
@@ -120,98 +134,37 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
     })
 
 # ----------------- Logic -----------------
-def extract_json(text: str):
-    start = text.find("{")
-    if start == -1:
-        return None
-    brace_count = 0
-    for i, char in enumerate(text[start:], start=start):
-        if char == "{":
-            brace_count += 1
-        elif char == "}":
-            brace_count -= 1
-            if brace_count == 0:
-                return text[start:i+1]
-    return None
-
 def generate_plan(job_id, prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
+    # 🔥 Escaped braces for f-string
     plan_prompt = f"""
-        You are a senior software project planner. Your goal is to design a clear and structured implementation plan for the following project:
+You are a senior software project planner.
 
-Project Description:
+Based on this description:
 {prompt}
 
-Your response must meet these strict rules:
-
-1. **Output Format (JSON Only)**:
-Return ONLY valid JSON in the following structure:
-{
-  "project_name": "<short descriptive name for this project>",
+Return ONLY valid JSON using this structure:
+{{
+  "project_name": "<short name>",
   "files": [
-    {
-      "path": "<relative path of the file or folder, using forward slashes for directories>",
-      "description": "<purpose and functionality of this file in one concise sentence>",
-      "prompt": "<specific and actionable instruction for generating this file's content>"
-    }
+    {{
+      "path": "<file path>",
+      "description": "<what the file does>",
+      "prompt": "<specific instruction for generating the file>"
+    }}
   ]
-}
+}}
 
-2. **Requirements**:
-- Do NOT include any text outside of JSON (no explanations, no comments, no code fences, no markdown).
-- `project_name` must be short but descriptive, based on the project description.
-- `files` must be a non-empty array with **only real, necessary files**.
-- Use directories for templates, static assets, or modular code where needed.
-- Every `prompt` should clearly specify what to implement in that file, including key frameworks, libraries, and constraints from the project description.
-- If dependencies are required, include a `dependencies.txt` or similar file with an appropriate `prompt`.
-- Avoid generic placeholders like `main_file.ext`; infer actual file names relevant to the project context.
-
-3. **Quality Expectations**:
-- Generate between 5–12 file entries for typical small-to-medium projects.
-- Include core logic files, configuration, templates/UI files, and at least one documentation file (like README.md).
-- For web or API projects, include folders for templates (`templates/`) and static assets (`static/`), if applicable.
-
-4. **STRICT OUTPUT POLICY**:
-- The output MUST be valid JSON that can be parsed without errors.
-- Do NOT include "END OF PLAN" or any phrases outside JSON.
-- Do NOT repeat the instructions or schema.
-
-Example (for a web dashboard project):
-{
-  "project_name": "CSV Analyzer Dashboard",
-  "files": [
-    {
-      "path": "app.py",
-      "description": "Main Flask application with routes for uploading and analyzing CSV files.",
-      "prompt": "Create a Flask app with routes for uploading CSV files, analyzing them using pandas, and rendering results using Jinja templates."
-    },
-    {
-      "path": "templates/index.html",
-      "description": "Homepage with file upload form.",
-      "prompt": "Write an HTML template with a Bootstrap-styled form for CSV upload and a submit button."
-    },
-    {
-      "path": "static/css/styles.css",
-      "description": "Custom styles for the dashboard UI.",
-      "prompt": "Create minimal CSS for improving the appearance of the Flask dashboard."
-    },
-    {
-      "path": "requirements.txt",
-      "description": "List of Python dependencies for this project.",
-      "prompt": "Include Flask, pandas, and Plotly in this requirements file."
-    },
-    {
-      "path": "README.md",
-      "description": "Project overview and setup instructions.",
-      "prompt": "Write a README explaining how to install dependencies, run the app, and upload CSV files."
-    }
-  ]
-}
-
-Now, based on the provided project description, produce the plan JSON.
-    """
+Rules:
+- Do NOT output anything outside JSON (no explanations, no code fences).
+- Fill in actual project_name and file details.
+- Include 5-12 files: main logic, config, templates, static assets, and README.
+- Use directories like templates/ and static/ when needed.
+- Include a dependencies file if required.
+- Output ONLY valid JSON.
+"""
 
     perf_settings = get_autotune_settings(plan_prompt)
     cmd = [
@@ -244,6 +197,7 @@ Now, based on the provided project description, produce the plan JSON.
     try:
         plan = json.loads(json_block)
     except JSONDecodeError as e:
+        logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
         if repair_json:
             try:
                 fixed_json = repair_json(json_block)
@@ -252,7 +206,6 @@ Now, based on the provided project description, produce the plan JSON.
                 update_job_status(job_id, "error", "Invalid JSON after repair.")
                 return False
         else:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
             update_job_status(job_id, "error", f"Invalid JSON: {e}")
             return False
 
