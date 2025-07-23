@@ -34,7 +34,8 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 init_db()
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
-MODEL_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
+MODEL_CODE_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
+MODEL_PLAN_PATH = "/home/smithkt/models/mistral/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
 
 def format_local_time(iso_str):
     if not iso_str:
