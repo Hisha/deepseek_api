@@ -9,10 +9,10 @@ def init_db():
     c.execute("""
     CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        prompt TEXT,
-        status TEXT,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL,
         output TEXT,
-        created_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         completed_at TEXT,
         type TEXT DEFAULT 'chat'
     )
