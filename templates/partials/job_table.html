@@ -12,7 +12,9 @@
 {% for job in jobs %}
 <tr class="border-b border-gray-700">
 <td class="p-2">
-    <a href="/job/{{ job[0] }}" hx-get="/job/{{ job[0] }}" hx-target="#job-detail" hx-swap="innerHTML"
+    <a href="{{ request.scope.root_path }}/job/{{ job[0] }}"
+       hx-get="{{ request.scope.root_path }}/job/{{ job[0] }}"
+       hx-target="#job-detail" hx-swap="innerHTML"
        class="text-blue-400 hover:underline">{{ job[0] }}</a>
 </td>
 <td class="p-2">{{ job[1][:40] }}...</td>
