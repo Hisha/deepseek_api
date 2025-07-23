@@ -163,16 +163,30 @@ def process_project_job(job_id, prompt):
 
         logging.info(f"[Project Job {job_id}] Generating project plan...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        raw_output = result.stdout
+        raw_output = result.stdout.strip()
 
-        # Extract JSON from model output
+        # Extract JSON safely
         import re, json
-        match = re.search(r'\{[\s\S]*\}', raw_output)
-        if not match:
-            update_job_status(job_id, "error", "Failed to parse project plan")
+        json_match = re.search(r'\{[\s\S]*\}', raw_output)
+        if not json_match:
+            update_job_status(job_id, "error", "Failed to parse project plan (no JSON found)")
+            logging.error(f"[Project Job {job_id}] Model output:\n{raw_output[:1000]}")
             return
 
-        plan = json.loads(match.group(0))
+        try:
+            plan_text = json_match.group(0)
+            plan = json.loads(plan_text)
+        except json.JSONDecodeError as e:
+            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
+            logging.error(f"Raw output snippet: {raw_output[:1000]}")
+            update_job_status(job_id, "error", f"Invalid JSON: {e}")
+            return
+
+        # Validate structure
+        if "files" not in plan or not isinstance(plan["files"], list):
+            update_job_status(job_id, "error", "Invalid plan format (missing 'files' key)")
+            logging.error(f"[Project Job {job_id}] Invalid plan structure: {plan}")
+            return
 
         # Save plan to file
         plan_path = os.path.join(project_folder, "plan.json")
