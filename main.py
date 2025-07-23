@@ -20,6 +20,8 @@ app = FastAPI(root_path="/chat")
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["now"] = datetime.now
 eastern = pytz.timezone("US/Eastern")
+PROJECTS_DIR = "/home/smithkt/deepseek_projects"
+os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 # Initialize database
 init_db()
@@ -121,8 +123,68 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
     })
 
 #####################################################################################
-#                                  Worker                                           #
+#                                  Other                                            #
 #####################################################################################
+
+def process_project_job(job_id, prompt):
+    try:
+        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+        os.makedirs(project_folder, exist_ok=True)
+
+        # 1. Generate project plan using DeepSeek
+        plan_prompt = f"""
+        Based on this project description: {prompt}
+
+        Generate a JSON plan for the file structure and what each file should contain.
+        Example format:
+        {{
+          "files": [
+            {{"path": "app.py", "description": "Flask entry point"}},
+            {{"path": "analyzer.py", "description": "Text analysis logic"}},
+            {{"path": "templates/upload.html", "description": "Upload form"}},
+            {{"path": "templates/analyze.html", "description": "Analysis results page"}},
+            {{"path": "requirements.txt", "description": "Dependencies list"}},
+            {{"path": "README.md", "description": "Project overview and setup instructions"}}
+          ]
+        }}
+        Only return valid JSON. No extra text.
+        """
+
+        settings = get_autotune_settings(plan_prompt)
+        cmd = [
+            LLAMA_PATH, "-m", MODEL_PATH,
+            "-t", settings["threads"],
+            "--ctx-size", settings["ctx_size"],
+            "--n-predict", settings["n_predict"],
+            "--batch-size", settings["batch_size"],
+            "--temp", "0.2", "--repeat-penalty", "1.1",
+            "--top-p", "0.95", "-p", plan_prompt
+        ]
+
+        logging.info(f"[Project Job {job_id}] Generating project plan...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        raw_output = result.stdout
+
+        # Extract JSON from model output
+        import re, json
+        match = re.search(r'\{[\s\S]*\}', raw_output)
+        if not match:
+            update_job_status(job_id, "error", "Failed to parse project plan")
+            return
+
+        plan = json.loads(match.group(0))
+
+        # Save plan to file
+        plan_path = os.path.join(project_folder, "plan.json")
+        with open(plan_path, "w") as f:
+            json.dump(plan, f, indent=2)
+
+        update_job_status(job_id, "done", f"Project plan created with {len(plan['files'])} files.")
+        logging.info(f"[Project Job {job_id}] Plan saved: {plan_path}")
+
+    except Exception as e:
+        logging.error(f"[Project Job {job_id}] Error: {e}")
+        update_job_status(job_id, "error", str(e))
 
 def worker():
     logging.info("Worker thread started (Auto-Tune enabled)")
@@ -130,38 +192,18 @@ def worker():
         try:
             conn = sqlite3.connect("jobs.db")
             c = conn.cursor()
-            c.execute("SELECT id, prompt FROM jobs WHERE status = 'queued' ORDER BY id ASC LIMIT 1")
+            c.execute("SELECT id, prompt, type FROM jobs WHERE status = 'queued' ORDER BY id ASC LIMIT 1")
             job = c.fetchone()
             conn.close()
 
             if job:
-                job_id, prompt = job
-                logging.info(f"Picked job {job_id} for processing")
+                job_id, prompt, job_type = job
                 update_job_status(job_id, "processing")
 
-                # Auto-tune settings
-                settings = get_autotune_settings(prompt)
-                logging.info(f"Applied Auto-Tune: Threads={settings['threads']} n_predict={settings['n_predict']} Batch={settings['batch_size']}")
-
-                cmd = [
-                    LLAMA_PATH, "-m", MODEL_PATH,
-                    "-t", settings["threads"],
-                    "--ctx-size", settings["ctx_size"],
-                    "--n-predict", settings["n_predict"],
-                    "--batch-size", settings["batch_size"],
-                    "--temp", "0.2", "--repeat-penalty", "1.1",
-                    "--top-p", "0.95", "-p", prompt
-                ]
-
-                try:
-                    logging.info(f"Running llama-cli for job {job_id}")
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
-                    output = result.stdout
-                    logging.info(f"Job {job_id} completed successfully")
-                    update_job_status(job_id, "done", output)
-                except subprocess.TimeoutExpired:
-                    logging.error(f"Job {job_id} timed out")
-                    update_job_status(job_id, "error", "Job timed out.")
+                if job_type == "chat":
+                    process_chat_job(job_id, prompt)
+                elif job_type == "project":
+                    process_project_job(job_id, prompt)
             else:
                 time.sleep(3)
         except Exception as e:
