@@ -166,20 +166,22 @@ def process_project_job(job_id, prompt):
         raw_output = result.stdout.strip()
 
         # Extract JSON safely
-        import re, json
-        json_match = re.search(r'\{[\s\S]*\}', raw_output)
-        if not json_match:
-            update_job_status(job_id, "error", "Failed to parse project plan (no JSON found)")
-            logging.error(f"[Project Job {job_id}] Model output:\n{raw_output[:1000]}")
+        import json
+        start = raw_output.find("{")
+        end = raw_output.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            update_job_status(job_id, "error", "No valid JSON object found in output")
+            logging.error(f"[Project Job {job_id}] Raw output:\n{raw_output[:1000]}")
             return
 
+        json_block = raw_output[start:end+1]
+
         try:
-            plan_text = json_match.group(0)
-            plan = json.loads(plan_text)
+            plan = json.loads(json_block)
         except json.JSONDecodeError as e:
             logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            logging.error(f"Raw output snippet: {raw_output[:1000]}")
-            update_job_status(job_id, "error", f"Invalid JSON: {e}")
+            logging.error(f"JSON candidate snippet: {json_block[:1000]}")
+            update_job_status(job_id, "error", f"Invalid JSON after cleanup: {e}")
             return
 
         # Validate structure
