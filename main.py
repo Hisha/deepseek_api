@@ -8,6 +8,7 @@ from datetime import datetime
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["root_path"] = "/chat"
 templates.env.globals['now'] = datetime.now
 init_db()
 
