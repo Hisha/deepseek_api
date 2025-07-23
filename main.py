@@ -54,17 +54,19 @@ def get_autotune_settings():
         "batch_size": str(batch_size)
     }
 
-def extract_after_inst(text: str) -> str:
-    """Take everything after [/INST] for clean JSON/code extraction."""
+def extract_json_after_inst(text: str) -> str:
+    """Extract valid JSON after [/INST] and capture only the first { ... } block."""
+    # Remove everything before [/INST]
     start = text.find("[/INST]")
-    return text[start + len("[/INST]"):].strip() if start != -1 else text
+    if start != -1:
+        text = text[start + len("[/INST]"):]
 
-def clean_code_output(raw: str) -> str:
-    """Remove markdown fences, [INST] remnants, and any extra text outside code."""
-    code = extract_after_inst(raw)
-    code = re.sub(r"^```[a-zA-Z]*", "", code).strip()
-    code = re.sub(r"```$", "", code).strip()
-    return code
+    text = text.strip()
+    # Use regex to grab first JSON object
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    return text
 
 # ----------------- Phase 1: Plan Generation -----------------
 def generate_plan(job_id, prompt):
@@ -115,13 +117,14 @@ Rules:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     raw_output = result.stdout.strip()
 
-    json_block = extract_after_inst(raw_output)
+    # Extract JSON safely
+    json_block = extract_json_after_inst(raw_output)
 
     try:
         plan = json.loads(json_block)
     except json.JSONDecodeError as e:
         logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-        update_job_status(job_id, "error", "Invalid JSON in plan.")
+        update_job_status(job_id, "error", f"Invalid JSON: {e}")
         return False
 
     if "files" not in plan or not isinstance(plan["files"], list):
@@ -137,7 +140,7 @@ Rules:
     return True
 
 # ----------------- Phase 2: File Generation -----------------
-def generate_files(job_id, original_prompt):
+def generate_files(job_id):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     plan_path = os.path.join(project_folder, "plan.json")
 
@@ -150,31 +153,15 @@ def generate_files(job_id, original_prompt):
 
     files = plan.get("files", [])
     total_files = len(files)
-    plan_summary = "\n".join([f"- {f['path']}: {f['description']}" for f in files])
 
     for idx, file_info in enumerate(files, start=1):
         path = file_info["path"]
-        description = file_info["description"]
-        file_prompt = file_info["prompt"]
+        prompt = file_info["prompt"]
         abs_path = os.path.join(project_folder, path)
 
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        status_msg = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(job_id, "processing", status_msg)
-        logging.info(f"[Project Job {job_id}] {status_msg}")
-
-        code_prompt = f"""
-You are generating code for: {path}
-Project Description: {original_prompt}
-Role of this file: {description}
-Full Project Structure:
-{plan_summary}
-
-Generate ONLY the complete and correct source code for this file.
-Rules:
-- Do NOT include explanations, comments outside the code, or markdown fences.
-- Output ONLY the code.
-"""
+        update_job_status(job_id, "processing", f"Generating file {idx}/{total_files}: {path}")
+        logging.info(f"[Project Job {job_id}] Generating file {idx}/{total_files}: {path}")
 
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH,
@@ -184,22 +171,12 @@ Rules:
             "--temp", "0.3",
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
-            "-p", code_prompt
+            "-p", prompt
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        raw_code = result.stdout.strip()
-        clean_code = clean_code_output(raw_code)
-
         with open(abs_path, "w") as out_file:
-            out_file.write(clean_code)
-
-        # Optional syntax check for Python files
-        if abs_path.endswith(".py"):
-            proc = subprocess.run(["python3", "-m", "py_compile", abs_path],
-                                  capture_output=True, text=True)
-            if proc.returncode != 0:
-                logging.warning(f"Syntax check failed for {path}: {proc.stderr}")
+            proc = subprocess.Popen(cmd, stdout=out_file, stderr=subprocess.PIPE, text=True)
+            proc.wait()
 
     update_job_status(job_id, "completed", f"All {total_files} files generated.")
     return True
@@ -221,7 +198,7 @@ def worker():
 
                 if job_type == "project":
                     if generate_plan(job_id, prompt):
-                        generate_files(job_id, prompt)
+                        generate_files(job_id)
                 else:
                     update_job_status(job_id, "error", "Chat job handler not implemented")
             else:
@@ -232,7 +209,7 @@ def worker():
 
 Thread(target=worker, daemon=True).start()
 
-# ----------------- FastAPI Routes -----------------
+# ----------------- Routes with HTMX -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
@@ -266,3 +243,7 @@ async def jobs_table(request: Request):
 async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
     return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
+
+@app.get("/status")
+async def status():
+    return JSONResponse({"status": "running", "worker": "active"})
