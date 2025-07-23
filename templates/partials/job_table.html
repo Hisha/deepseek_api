@@ -19,8 +19,8 @@
 </td>
 <td class="p-2">{{ job[1][:40] }}...</td>
 <td class="p-2">{{ job[2] }}</td>
-<td class="p-2">{{ job[3] }}</td>
-<td class="p-2">{{ job[4] or '—' }}</td>
+<td class="p-2">{{ job[3]|localtime }}</td>
+<td class="p-2">{{ job[4]|localtime }}</td>
 </tr>
 {% endfor %}
 </tbody>
