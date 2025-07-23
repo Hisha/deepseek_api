@@ -12,13 +12,6 @@ import pytz
 import os
 import psutil
 from dateutil import parser
-import json
-from json import JSONDecodeError
-
-try:
-    from json_repair import repair_json  # Optional: pip install json-repair
-except ImportError:
-    repair_json = None  # Skip if not installed
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -33,7 +26,6 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 init_db()
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
-MODEL_CODE_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
 MODEL_PLAN_PATH = "/home/smithkt/models/mistral/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
 
 # ----------------- Helpers -----------------
@@ -76,20 +68,6 @@ def get_autotune_settings(prompt):
         "n_predict": str(n_predict),
         "batch_size": str(batch_size)
     }
-
-def extract_json(text: str):
-    start = text.find("{")
-    if start == -1:
-        return None
-    brace_count = 0
-    for i, char in enumerate(text[start:], start=start):
-        if char == "{":
-            brace_count += 1
-        elif char == "}":
-            brace_count -= 1
-            if brace_count == 0:
-                return text[start:i+1]
-    return None
 
 # ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
@@ -135,7 +113,6 @@ def generate_plan(job_id, prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
-    # ✅ FINAL Prompt
     plan_prompt = f"""
 You are a software project planner. Based on this description: {prompt}
 
@@ -177,47 +154,22 @@ Rules:
         "-p", plan_prompt
     ]
 
-    logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
+    logging.info(f"[Project Job {job_id}] Generating raw output for debugging...")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     raw_output = result.stdout.strip()
 
     if not raw_output:
         logging.error(f"[Project Job {job_id}] Planner returned empty output.")
-        update_job_status(job_id, "error", "Planner output empty or invalid.")
+        update_job_status(job_id, "error", "Planner output empty.")
         return False
 
-    json_block = extract_json(raw_output)
-    if not json_block:
-        logging.error(f"[Project Job {job_id}] No JSON found. Raw output:\n{raw_output[:500]}")
-        update_job_status(job_id, "error", "No valid JSON found in output.")
-        return False
+    # ✅ Save raw output to a file for debugging
+    raw_path = os.path.join(project_folder, "plan_raw.txt")
+    with open(raw_path, "w") as f:
+        f.write(raw_output)
 
-    try:
-        plan = json.loads(json_block)
-    except JSONDecodeError as e:
-        if repair_json:
-            try:
-                fixed_json = repair_json(json_block)
-                plan = json.loads(fixed_json)
-            except Exception:
-                update_job_status(job_id, "error", "Invalid JSON after repair.")
-                return False
-        else:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            update_job_status(job_id, "error", f"Invalid JSON: {e}")
-            return False
-
-    if "files" not in plan or not isinstance(plan["files"], list):
-        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
-        return False
-
-    # Save to plan.json
-    plan_path = os.path.join(project_folder, "plan.json")
-    with open(plan_path, "w") as f:
-        json.dump(plan, f, indent=2)
-
-    update_job_status(job_id, "planned", f"Plan saved with {len(plan['files'])} files.")
-    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
+    logging.info(f"[Project Job {job_id}] Raw output saved to {raw_path}")
+    update_job_status(job_id, "raw_saved", "Raw LLM output saved.")
     return True
 
 # ----------------- Worker -----------------
