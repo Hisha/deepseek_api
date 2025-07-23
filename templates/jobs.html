@@ -5,7 +5,7 @@
 
 <div id="jobs-table"
      hx-get="{{ request.scope.root_path }}/jobs/table"
-     hx-trigger="every 5s"
+     hx-trigger="every 30s"
      hx-target="#jobs-table">
     {% include "partials/job_table.html" %}
 </div>
