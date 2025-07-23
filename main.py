@@ -159,17 +159,13 @@ def get_task_settings(task):
     return presets.get(task, presets["plan"])
 
 
-def process_project_job(job_id, prompt):
-    try:
-        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
-        os.makedirs(project_folder, exist_ok=True)
+def generate_plan(job_id, prompt):
+    """Stage 1: Create a plan.txt using Mistral planner model."""
+    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+    os.makedirs(project_folder, exist_ok=True)
 
-        #####################
-        # Phase 1: Planning #
-        #####################
-        plan_prompt = f"""
+    plan_prompt = f"""
 You are a software project planner.
-
 Task:
 Based on this project description:
 {prompt}
@@ -184,98 +180,108 @@ Project Plan:
 Files:
 1. path: app.py
    description: Flask entry point
-   prompt: Create a Flask web app with basic routing, showing a homepage and handling file uploads.
-
-2. path: templates/index.html
-   description: HTML template for upload form
-   prompt: Create a simple HTML template using Bootstrap with a form for file uploads.
+   prompt: Create a Flask web app with basic routing.
 
 End your response with:
 "END OF PLAN"
 """
 
-        perf = get_autotune_settings(plan_prompt)
-        plan_cfg = get_task_settings("plan")
+    perf_settings = get_autotune_settings(plan_prompt)
+    gen_settings = get_task_settings("plan")
 
-        plan_cmd = [
-            LLAMA_PATH, "-m", MODEL_PLAN_PATH,
-            "-t", perf["threads"],
-            "--ctx-size", perf["ctx_size"],
-            "--n-predict", plan_cfg["n_predict"],
-            "--batch-size", perf["batch_size"],
-            "--temp", plan_cfg["temp"],
-            "--repeat-penalty", plan_cfg["repeat_penalty"],
-            "--top-p", plan_cfg["top_p"],
-            "-p", plan_prompt
+    cmd = [
+        LLAMA_PATH, "-m", MODEL_PLAN_PATH,  # Use Mistral for planning
+        "-t", perf_settings["threads"],
+        "--ctx-size", perf_settings["ctx_size"],
+        "--n-predict", gen_settings["n_predict"],
+        "--batch-size", perf_settings["batch_size"],
+        "--temp", gen_settings["temp"],
+        "--repeat-penalty", gen_settings["repeat_penalty"],
+        "--top-p", gen_settings["top_p"],
+        "-p", plan_prompt
+    ]
+
+    logging.info(f"[Project Job {job_id}] Generating project plan...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    raw_output = result.stdout.strip()
+
+    if not raw_output:
+        logging.error(f"[Project Job {job_id}] Planner returned empty output.")
+        update_job_status(job_id, "error", "Planner output empty or invalid.")
+        return False
+
+    # Save plan.txt
+    plan_path = os.path.join(project_folder, "plan.txt")
+    with open(plan_path, "w") as f:
+        f.write(raw_output)
+
+    update_job_status(job_id, "planned", f"Plan generated. Next: file generation.")
+    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
+    return True
+
+
+def generate_files_from_plan(job_id):
+    """Stage 2: Read plan.txt, parse, and generate files using DeepSeek."""
+    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+    plan_path = os.path.join(project_folder, "plan.txt")
+
+    if not os.path.exists(plan_path):
+        logging.error(f"[Project Job {job_id}] plan.txt not found.")
+        update_job_status(job_id, "error", "Plan file missing.")
+        return
+
+    with open(plan_path, "r") as f:
+        plan_text = f.read()
+
+    # Extract lines after "Files:" and before "END OF PLAN"
+    import re
+    file_entries = re.findall(r'path:\s*(.*?)\s*description:\s*(.*?)\s*prompt:\s*(.*?)(?=\n\d+\.|END OF PLAN)', plan_text, re.DOTALL)
+    if not file_entries:
+        logging.error(f"[Project Job {job_id}] No file entries found in plan.txt")
+        update_job_status(job_id, "error", "Failed to parse plan file.")
+        return
+
+    for idx, (path, description, prompt) in enumerate(file_entries, start=1):
+        file_path = os.path.join(project_folder, path.strip())
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        logging.info(f"[Project Job {job_id}] Generating file {idx}: {path}")
+
+        gen_prompt = f"""
+You are a code generation assistant.
+Task: {description.strip()}
+Prompt: {prompt.strip()}
+
+Write production-ready code for this file.
+"""
+
+        settings = get_autotune_settings(gen_prompt)
+        cmd = [
+            LLAMA_PATH, "-m", MODEL_CODE_PATH,
+            "-t", settings["threads"],
+            "--ctx-size", settings["ctx_size"],
+            "--n-predict", "2048",
+            "--batch-size", settings["batch_size"],
+            "--temp", "0.2", "--repeat-penalty", "1.1",
+            "--top-p", "0.95", "-p", gen_prompt
         ]
-        if "stop" in plan_cfg:
-            for stop in plan_cfg["stop"]:
-                plan_cmd.extend(["--stop", stop])
 
-        logging.info(f"[Project Job {job_id}] Generating plan...")
-        result = subprocess.run(plan_cmd, capture_output=True, text=True, timeout=600)
-        raw_plan = result.stdout.strip()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        code_output = result.stdout.strip()
 
-        plan_path = os.path.join(project_folder, "plan.txt")
-        with open(plan_path, "w") as f:
-            f.write(raw_plan)
+        if not code_output:
+            logging.warning(f"[Project Job {job_id}] Empty output for {path}")
+            continue
 
-        if not raw_plan or "path:" not in raw_plan:
-            update_job_status(job_id, "error", "Planner output empty or invalid")
-            return
+        with open(file_path, "w") as f:
+            f.write(code_output)
 
-        ###########################
-        # Phase 2: Code Generation #
-        ###########################
-        logging.info(f"[Project Job {job_id}] Parsing plan and generating code...")
+    update_job_status(job_id, "done", f"All files generated for job {job_id}.")
+    logging.info(f"[Project Job {job_id}] Files created successfully.")
 
-        files = []
-        current = {}
-        for line in raw_plan.splitlines():
-            line = line.strip()
-            if line.startswith("path:"):
-                if current:
-                    files.append(current)
-                current = {"path": line.replace("path:", "").strip()}
-            elif line.startswith("prompt:") and current is not None:
-                current["prompt"] = line.replace("prompt:", "").strip()
-        if current:
-            files.append(current)
-
-        code_cfg = get_task_settings("file")
-
-        for file in files:
-            full_path = os.path.join(project_folder, file["path"])
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-
-            code_prompt = f"Generate the full code for {file['path']} based on this description:\n{file['prompt']}"
-            code_perf = get_autotune_settings(code_prompt)
-
-            code_cmd = [
-                LLAMA_PATH, "-m", MODEL_CODE_PATH,
-                "-t", code_perf["threads"],
-                "--ctx-size", code_perf["ctx_size"],
-                "--n-predict", code_cfg["n_predict"],
-                "--batch-size", code_perf["batch_size"],
-                "--temp", code_cfg["temp"],
-                "--repeat-penalty", code_cfg["repeat_penalty"],
-                "--top-p", code_cfg["top_p"],
-                "-p", code_prompt
-            ]
-
-            logging.info(f"[Project Job {job_id}] Generating {file['path']}...")
-            result = subprocess.run(code_cmd, capture_output=True, text=True, timeout=600)
-            output = result.stdout.strip()
-
-            with open(full_path, "w") as f:
-                f.write(output)
-
-        update_job_status(job_id, "done", f"Project plan + {len(files)} files created.")
-        logging.info(f"[Project Job {job_id}] All files generated.")
-
-    except Exception as e:
-        logging.error(f"[Project Job {job_id}] Error: {e}")
-        update_job_status(job_id, "error", str(e))
+def process_project_job(job_id, prompt):
+    if generate_plan(job_id, prompt):
+        generate_files_from_plan(job_id)
 
 def worker():
     logging.info("Worker thread started (Auto-Tune enabled)")
