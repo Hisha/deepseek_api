@@ -12,6 +12,14 @@ import pytz
 import os
 import psutil
 from dateutil import parser
+import json
+from json import JSONDecodeError
+import re
+
+try:
+    from json_repair import repair_json  # Optional: pip install json-repair
+except ImportError:
+    repair_json = None  # Fallback if not installed
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -46,7 +54,7 @@ def get_autotune_settings(prompt):
     available_ram_gb = psutil.virtual_memory().available / (1024**3)
 
     ctx_size = 4096
-    n_predict = 900
+    n_predict = 1024
     batch_size = 512
 
     if available_ram_gb > 128:
@@ -59,8 +67,11 @@ def get_autotune_settings(prompt):
         n_predict = 2048
         batch_size = 512
     else:
-        n_predict = 900
+        n_predict = 1024
         batch_size = 256
+
+    if len(prompt) > 1000 and n_predict < 4096:
+        n_predict = min(4096, n_predict + 512)
 
     return {
         "threads": str(cpu_threads),
@@ -68,6 +79,15 @@ def get_autotune_settings(prompt):
         "n_predict": str(n_predict),
         "batch_size": str(batch_size)
     }
+
+def clean_llama_output(raw_text: str) -> str:
+    """Remove [INST]...[/INST] blocks from llama.cpp output."""
+    return re.sub(r"\[INST\].*?\[/INST\]", "", raw_text, flags=re.DOTALL).strip()
+
+def extract_last_json(text: str):
+    """Extract the last valid JSON block from text."""
+    matches = re.findall(r"\{(?:[^{}]|(?R))*\}", text, flags=re.DOTALL)
+    return matches[-1] if matches else None
 
 # ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
@@ -108,7 +128,7 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
         "output": message
     })
 
-# ----------------- Core Logic -----------------
+# ----------------- Logic -----------------
 def generate_plan(job_id, prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
@@ -141,12 +161,11 @@ Rules:
 """
 
     perf_settings = get_autotune_settings(plan_prompt)
-
     cmd = [
         LLAMA_PATH, "-m", MODEL_PLAN_PATH,
         "-t", perf_settings["threads"],
         "--ctx-size", perf_settings["ctx_size"],
-        "--n-predict", perf_settings["n_predict"],
+        "--n-predict", "900",
         "--batch-size", perf_settings["batch_size"],
         "--temp", "0.2",
         "--repeat-penalty", "1.1",
@@ -154,22 +173,55 @@ Rules:
         "-p", plan_prompt
     ]
 
-    logging.info(f"[Project Job {job_id}] Generating raw output for debugging...")
+    logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     raw_output = result.stdout.strip()
 
-    if not raw_output:
-        logging.error(f"[Project Job {job_id}] Planner returned empty output.")
-        update_job_status(job_id, "error", "Planner output empty.")
-        return False
-
-    # ✅ Save raw output to a file for debugging
+    # Save raw output for debugging
     raw_path = os.path.join(project_folder, "plan_raw.txt")
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    logging.info(f"[Project Job {job_id}] Raw output saved to {raw_path}")
-    update_job_status(job_id, "raw_saved", "Raw LLM output saved.")
+    if not raw_output:
+        logging.error(f"[Project Job {job_id}] Planner returned empty output.")
+        update_job_status(job_id, "error", "Planner output empty or invalid.")
+        return False
+
+    # Clean and extract JSON
+    cleaned_output = clean_llama_output(raw_output)
+    json_block = extract_last_json(cleaned_output)
+
+    if not json_block:
+        logging.error(f"[Project Job {job_id}] No JSON found. Raw output:\n{raw_output[:500]}")
+        update_job_status(job_id, "error", "No valid JSON found in output.")
+        return False
+
+    try:
+        plan = json.loads(json_block)
+    except JSONDecodeError as e:
+        if repair_json:
+            try:
+                fixed_json = repair_json(json_block)
+                plan = json.loads(fixed_json)
+            except Exception:
+                update_job_status(job_id, "error", "Invalid JSON after repair.")
+                return False
+        else:
+            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
+            update_job_status(job_id, "error", f"Invalid JSON: {e}")
+            return False
+
+    if "files" not in plan or not isinstance(plan["files"], list):
+        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
+        return False
+
+    # Save to plan.json
+    plan_path = os.path.join(project_folder, "plan.json")
+    with open(plan_path, "w") as f:
+        json.dump(plan, f, indent=2)
+
+    update_job_status(job_id, "planned", f"Plan saved with {len(plan['files'])} files.")
+    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
     return True
 
 # ----------------- Worker -----------------
