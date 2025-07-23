@@ -139,27 +139,79 @@ def generate_plan(job_id, prompt):
     os.makedirs(project_folder, exist_ok=True)
 
     plan_prompt = f"""
-You are a software project planner.
+        You are a senior software project planner. Your goal is to design a clear and structured implementation plan for the following project:
 
-Generate ONLY valid JSON (no text outside JSON) following this structure:
-{{
-  "project_name": "string",
+Project Description:
+{prompt}
+
+Your response must meet these strict rules:
+
+1. **Output Format (JSON Only)**:
+Return ONLY valid JSON in the following structure:
+{
+  "project_name": "<short descriptive name for this project>",
   "files": [
-    {{
-      "path": "string (file path)",
-      "description": "string (purpose of this file)",
-      "prompt": "string (instruction for generating code for this file)"
-    }}
+    {
+      "path": "<relative path of the file or folder, using forward slashes for directories>",
+      "description": "<purpose and functionality of this file in one concise sentence>",
+      "prompt": "<specific and actionable instruction for generating this file's content>"
+    }
   ]
-}}
+}
 
-Rules:
-- Use the actual project description to decide file names and descriptions.
-- Do NOT copy this schema literally. Fill in real values.
-- Output ONLY JSON, no explanations or extra text.
+2. **Requirements**:
+- Do NOT include any text outside of JSON (no explanations, no comments, no code fences, no markdown).
+- `project_name` must be short but descriptive, based on the project description.
+- `files` must be a non-empty array with **only real, necessary files**.
+- Use directories for templates, static assets, or modular code where needed.
+- Every `prompt` should clearly specify what to implement in that file, including key frameworks, libraries, and constraints from the project description.
+- If dependencies are required, include a `dependencies.txt` or similar file with an appropriate `prompt`.
+- Avoid generic placeholders like `main_file.ext`; infer actual file names relevant to the project context.
 
-Project description: {prompt}
-"""
+3. **Quality Expectations**:
+- Generate between 5–12 file entries for typical small-to-medium projects.
+- Include core logic files, configuration, templates/UI files, and at least one documentation file (like README.md).
+- For web or API projects, include folders for templates (`templates/`) and static assets (`static/`), if applicable.
+
+4. **STRICT OUTPUT POLICY**:
+- The output MUST be valid JSON that can be parsed without errors.
+- Do NOT include "END OF PLAN" or any phrases outside JSON.
+- Do NOT repeat the instructions or schema.
+
+Example (for a web dashboard project):
+{
+  "project_name": "CSV Analyzer Dashboard",
+  "files": [
+    {
+      "path": "app.py",
+      "description": "Main Flask application with routes for uploading and analyzing CSV files.",
+      "prompt": "Create a Flask app with routes for uploading CSV files, analyzing them using pandas, and rendering results using Jinja templates."
+    },
+    {
+      "path": "templates/index.html",
+      "description": "Homepage with file upload form.",
+      "prompt": "Write an HTML template with a Bootstrap-styled form for CSV upload and a submit button."
+    },
+    {
+      "path": "static/css/styles.css",
+      "description": "Custom styles for the dashboard UI.",
+      "prompt": "Create minimal CSS for improving the appearance of the Flask dashboard."
+    },
+    {
+      "path": "requirements.txt",
+      "description": "List of Python dependencies for this project.",
+      "prompt": "Include Flask, pandas, and Plotly in this requirements file."
+    },
+    {
+      "path": "README.md",
+      "description": "Project overview and setup instructions.",
+      "prompt": "Write a README explaining how to install dependencies, run the app, and upload CSV files."
+    }
+  ]
+}
+
+Now, based on the provided project description, produce the plan JSON.
+    """
 
     perf_settings = get_autotune_settings(plan_prompt)
     cmd = [
