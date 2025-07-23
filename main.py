@@ -207,7 +207,7 @@ Respond ONLY with valid JSON.
         gen_settings = get_task_settings("plan")
 
         cmd = [
-            LLAMA_PATH, "-m", MODEL_PATH,
+            LLAMA_PATH, "-m", MODEL_PLAN_PATH,  # <-- Use planner model
             "-t", perf_settings["threads"],
             "--ctx-size", perf_settings["ctx_size"],
             "--n-predict", gen_settings["n_predict"],
