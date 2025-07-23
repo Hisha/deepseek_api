@@ -8,6 +8,8 @@ import subprocess
 import time
 import sqlite3
 import logging
+import pytz
+from dateutil import parser
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -15,12 +17,25 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 app = FastAPI(root_path="/chat")
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["now"] = datetime.now
+eastern = pytz.timezone("US/Eastern")
 
 # Initialize database
 init_db()
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
 MODEL_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
+
+def format_local_time(iso_str):
+    if not iso_str:
+        return "—"
+    try:
+        utc_time = parser.isoparse(iso_str)
+        local_time = utc_time.astimezone(eastern)
+        return local_time.strftime("%b %d, %Y %I:%M %p %Z")  # e.g., Jul 23, 2025 11:20 AM EDT
+    except Exception:
+        return iso_str
+
+templates.env.filters["localtime"] = format_local_time
 
 #####################################################################################
 #                                   GET                                             #
