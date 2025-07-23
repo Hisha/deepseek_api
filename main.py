@@ -13,11 +13,7 @@ import os
 import psutil
 from dateutil import parser
 import json
-
-try:
-    from json_repair import repair_json
-except ImportError:
-    repair_json = None
+import re
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -58,13 +54,19 @@ def get_autotune_settings():
         "batch_size": str(batch_size)
     }
 
-# ----------------- Phase 1: Plan Generation -----------------
 def extract_after_inst(text: str) -> str:
+    """Take everything after [/INST] for clean JSON/code extraction."""
     start = text.find("[/INST]")
-    if start == -1:
-        return text.strip()
-    return text[start + len("[/INST]"):].strip()
+    return text[start + len("[/INST]"):].strip() if start != -1 else text
 
+def clean_code_output(raw: str) -> str:
+    """Remove markdown fences, [INST] remnants, and any extra text outside code."""
+    code = extract_after_inst(raw)
+    code = re.sub(r"^```[a-zA-Z]*", "", code).strip()
+    code = re.sub(r"```$", "", code).strip()
+    return code
+
+# ----------------- Phase 1: Plan Generation -----------------
 def generate_plan(job_id, prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
@@ -113,21 +115,14 @@ Rules:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     raw_output = result.stdout.strip()
 
-    json_candidate = extract_after_inst(raw_output)
+    json_block = extract_after_inst(raw_output)
 
     try:
-        plan = json.loads(json_candidate)
+        plan = json.loads(json_block)
     except json.JSONDecodeError as e:
-        if repair_json:
-            try:
-                plan = json.loads(repair_json(json_candidate))
-            except Exception:
-                update_job_status(job_id, "error", "Invalid JSON after repair.")
-                return False
-        else:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            update_job_status(job_id, "error", f"Invalid JSON: {e}")
-            return False
+        logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
+        update_job_status(job_id, "error", "Invalid JSON in plan.")
+        return False
 
     if "files" not in plan or not isinstance(plan["files"], list):
         update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
@@ -142,7 +137,7 @@ Rules:
     return True
 
 # ----------------- Phase 2: File Generation -----------------
-def generate_files(job_id):
+def generate_files(job_id, original_prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     plan_path = os.path.join(project_folder, "plan.json")
 
@@ -155,15 +150,31 @@ def generate_files(job_id):
 
     files = plan.get("files", [])
     total_files = len(files)
+    plan_summary = "\n".join([f"- {f['path']}: {f['description']}" for f in files])
 
     for idx, file_info in enumerate(files, start=1):
         path = file_info["path"]
-        prompt = file_info["prompt"]
+        description = file_info["description"]
+        file_prompt = file_info["prompt"]
         abs_path = os.path.join(project_folder, path)
 
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        update_job_status(job_id, "processing", f"Generating file {idx}/{total_files}: {path}")
-        logging.info(f"[Project Job {job_id}] Generating file {idx}/{total_files}: {path}")
+        status_msg = f"Generating file {idx}/{total_files}: {path}"
+        update_job_status(job_id, "processing", status_msg)
+        logging.info(f"[Project Job {job_id}] {status_msg}")
+
+        code_prompt = f"""
+You are generating code for: {path}
+Project Description: {original_prompt}
+Role of this file: {description}
+Full Project Structure:
+{plan_summary}
+
+Generate ONLY the complete and correct source code for this file.
+Rules:
+- Do NOT include explanations, comments outside the code, or markdown fences.
+- Output ONLY the code.
+"""
 
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH,
@@ -173,12 +184,22 @@ def generate_files(job_id):
             "--temp", "0.3",
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
-            "-p", prompt
+            "-p", code_prompt
         ]
 
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        raw_code = result.stdout.strip()
+        clean_code = clean_code_output(raw_code)
+
         with open(abs_path, "w") as out_file:
-            proc = subprocess.Popen(cmd, stdout=out_file, stderr=subprocess.PIPE, text=True)
-            proc.wait()
+            out_file.write(clean_code)
+
+        # Optional syntax check for Python files
+        if abs_path.endswith(".py"):
+            proc = subprocess.run(["python3", "-m", "py_compile", abs_path],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                logging.warning(f"Syntax check failed for {path}: {proc.stderr}")
 
     update_job_status(job_id, "completed", f"All {total_files} files generated.")
     return True
@@ -200,7 +221,7 @@ def worker():
 
                 if job_type == "project":
                     if generate_plan(job_id, prompt):
-                        generate_files(job_id)
+                        generate_files(job_id, prompt)
                 else:
                     update_job_status(job_id, "error", "Chat job handler not implemented")
             else:
@@ -211,13 +232,24 @@ def worker():
 
 Thread(target=worker, daemon=True).start()
 
-# ----------------- Routes -----------------
+# ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
         "request": request,
         "prompt": "",
         "output": ""
+    })
+
+@app.post("/", response_class=HTMLResponse)
+async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
+    job_type = "project" if generate_project else "chat"
+    job_id = add_job(prompt, job_type)
+    message = f"Your {job_type} job has been queued. Job ID: {job_id}"
+    return templates.TemplateResponse("chat.html", {
+        "request": request,
+        "prompt": "",
+        "output": message
     })
 
 @app.get("/jobs", response_class=HTMLResponse)
@@ -234,18 +266,3 @@ async def jobs_table(request: Request):
 async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
     return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
-
-@app.post("/", response_class=HTMLResponse)
-async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
-    job_type = "project" if generate_project else "chat"
-    job_id = add_job(prompt, job_type)
-    message = f"Your {job_type} job has been queued. Job ID: {job_id}"
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": message
-    })
-
-@app.get("/status")
-async def status():
-    return JSONResponse({"status": "running", "worker": "active"})
