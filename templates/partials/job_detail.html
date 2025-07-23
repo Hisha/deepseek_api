@@ -1,4 +1,8 @@
-<div class="bg-gray-800 p-4 rounded-md mt-6">
+<div class="bg-gray-800 p-4 rounded-md mt-6"
+     hx-get="{{ request.scope.root_path }}/job/{{ job[0] }}"
+     hx-trigger="every 3s"
+     hx-target="#job-detail"
+     hx-swap="innerHTML">
     <h3 class="text-lg font-semibold mb-2">Job {{ job[0] }} Details</h3>
     <p><strong>Status:</strong> {{ job[2] }}</p>
     <p><strong>Prompt:</strong> {{ job[1] }}</p>
