@@ -2,9 +2,11 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import subprocess
+from datetime import datetime
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+templates.env.globals['now'] = datetime.now
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
 MODEL_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
