@@ -1,0 +1,25 @@
+<table class="table-auto w-full text-left border-collapse">
+<thead>
+<tr class="bg-gray-800 text-gray-200">
+<th class="p-2">ID</th>
+<th class="p-2">Prompt</th>
+<th class="p-2">Status</th>
+<th class="p-2">Created</th>
+<th class="p-2">Completed</th>
+</tr>
+</thead>
+<tbody>
+{% for job in jobs %}
+<tr class="border-b border-gray-700">
+<td class="p-2">
+    <a href="/job/{{ job[0] }}" hx-get="/job/{{ job[0] }}" hx-target="#job-detail" hx-swap="innerHTML"
+       class="text-blue-400 hover:underline">{{ job[0] }}</a>
+</td>
+<td class="p-2">{{ job[1][:40] }}...</td>
+<td class="p-2">{{ job[2] }}</td>
+<td class="p-2">{{ job[3] }}</td>
+<td class="p-2">{{ job[4] or '—' }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
