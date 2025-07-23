@@ -1,5 +1,6 @@
 venv/
 _pycache_/
+*.pyc
 *.log
 *.sqlite
 .env
