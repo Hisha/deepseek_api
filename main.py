@@ -6,9 +6,8 @@ from threading import Thread
 import subprocess, time
 from datetime import datetime
 
-app = FastAPI()
+app = FastAPI(root_path="/chat")
 templates = Jinja2Templates(directory="templates")
-templates.env.globals["root_path"] = "/chat"
 templates.env.globals['now'] = datetime.now
 init_db()
 
