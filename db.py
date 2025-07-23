@@ -20,13 +20,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-def add_job(prompt, job_type="chat"):
-    conn = sqlite3.connect("jobs.db")
+def add_job(prompt: str, job_type="chat") -> int:
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO jobs (prompt, status, created_at, type) VALUES (?, 'queued', ?, ?)",
-              (prompt, datetime.utcnow().isoformat(), job_type))
-    conn.commit()
+    c.execute(
+        "INSERT INTO jobs (prompt, status, created_at, type) VALUES (?, 'queued', ?, ?)",
+        (prompt, datetime.utcnow().isoformat(), job_type)
+    )
     job_id = c.lastrowid
+    conn.commit()
     conn.close()
     return job_id
 
