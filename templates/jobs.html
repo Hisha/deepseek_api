@@ -3,7 +3,10 @@
 {% block content %}
 <h2 class="text-xl font-bold mb-4">Job Queue</h2>
 
-<div id="jobs-table" hx-get="/jobs/table" hx-trigger="every 5s" hx-target="#jobs-table">
+<div id="jobs-table"
+     hx-get="{{ request.scope.root_path }}/jobs/table"
+     hx-trigger="every 5s"
+     hx-target="#jobs-table">
     {% include "partials/job_table.html" %}
 </div>
 <div id="job-detail" class="mt-6"></div>
