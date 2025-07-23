@@ -14,6 +14,11 @@ import psutil
 from dateutil import parser
 import json
 
+try:
+    from json_repair import repair_json
+except ImportError:
+    repair_json = None
+
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -57,7 +62,7 @@ def get_autotune_settings():
 def extract_after_inst(text: str) -> str:
     start = text.find("[/INST]")
     if start == -1:
-        return text
+        return text.strip()
     return text[start + len("[/INST]"):].strip()
 
 def generate_plan(job_id, prompt):
@@ -108,18 +113,21 @@ Rules:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     raw_output = result.stdout.strip()
 
-    raw_path = os.path.join(project_folder, "plan_raw.txt")
-    with open(raw_path, "w") as f:
-        f.write(raw_output)
-
-    json_block = extract_after_inst(raw_output)
+    json_candidate = extract_after_inst(raw_output)
 
     try:
-        plan = json.loads(json_block)
+        plan = json.loads(json_candidate)
     except json.JSONDecodeError as e:
-        logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-        update_job_status(job_id, "error", "Invalid JSON in plan.")
-        return False
+        if repair_json:
+            try:
+                plan = json.loads(repair_json(json_candidate))
+            except Exception:
+                update_job_status(job_id, "error", "Invalid JSON after repair.")
+                return False
+        else:
+            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
+            update_job_status(job_id, "error", f"Invalid JSON: {e}")
+            return False
 
     if "files" not in plan or not isinstance(plan["files"], list):
         update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
@@ -203,6 +211,7 @@ def worker():
 
 Thread(target=worker, daemon=True).start()
 
+# ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
@@ -210,6 +219,21 @@ async def get_chat(request: Request):
         "prompt": "",
         "output": ""
     })
+
+@app.get("/jobs", response_class=HTMLResponse)
+async def jobs_page(request: Request):
+    jobs = get_all_jobs()
+    return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
+
+@app.get("/jobs/table", response_class=HTMLResponse)
+async def jobs_table(request: Request):
+    jobs = get_all_jobs()
+    return templates.TemplateResponse("partials/job_table.html", {"request": request, "jobs": jobs})
+
+@app.get("/job/{job_id}", response_class=HTMLResponse)
+async def job_detail(request: Request, job_id: int):
+    job = get_job(job_id)
+    return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
 
 @app.post("/", response_class=HTMLResponse)
 async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
@@ -221,3 +245,7 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
         "prompt": "",
         "output": message
     })
+
+@app.get("/status")
+async def status():
+    return JSONResponse({"status": "running", "worker": "active"})
