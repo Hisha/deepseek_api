@@ -159,55 +159,45 @@ def get_task_settings(task):
     return presets.get(task, presets["plan"])
 
 
-def extract_first_json_block(text: str) -> str:
-    start = text.find("{")
-    if start == -1:
-        return None
-    brace_count = 0
-    for i, char in enumerate(text[start:], start=start):
-        if char == "{":
-            brace_count += 1
-        elif char == "}":
-            brace_count -= 1
-            if brace_count == 0:
-                return text[start:i + 1]
-    return None
-
-
 def process_project_job(job_id, prompt):
     try:
         project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
         os.makedirs(project_folder, exist_ok=True)
 
-        # STRONG JSON-ONLY PROMPT
+        # Planner prompt for Mistral
         plan_prompt = f"""
-You are a code generation assistant.
-Task: Based on this project description, output ONLY JSON that defines the file structure and purpose.
+You are a software project planner.
 
-Project: {prompt}
+Task:
+Based on this project description:
+{prompt}
 
-Your response MUST:
-- Start immediately with '{{'
-- End immediately with '}}'
-- Follow this structure:
-{{
-  "files": [
-    {{"path": "app.py", "description": "Flask entry point"}},
-    {{"path": "templates/index.html", "description": "Main HTML template"}},
-    {{"path": "requirements.txt", "description": "Dependencies list"}}
-  ]
-}}
+Produce a detailed project structure with:
+- List of files and their paths
+- Description of each file's purpose
+- For each file, include a suggested prompt for generating its code
 
-Do NOT include any explanation, comments, or extra text.
-Respond ONLY with valid JSON.
+Output Format:
+Project Plan:
+Files:
+1. path: app.py
+   description: Flask entry point
+   prompt: Create a Flask web app with basic routing, showing a homepage and handling file uploads.
+
+2. path: templates/index.html
+   description: HTML template for upload form
+   prompt: Create a simple HTML template using Bootstrap with a form for file uploads.
+
+End your response with:
+"END OF PLAN"
 """
 
-        # Combine performance and generation settings
-        perf_settings = get_autotune_settings(plan_prompt)  # From your autotune logic
+        # Performance tuning for planning
+        perf_settings = get_autotune_settings(plan_prompt)
         gen_settings = get_task_settings("plan")
 
         cmd = [
-            LLAMA_PATH, "-m", MODEL_PLAN_PATH,  # <-- Use planner model
+            LLAMA_PATH, "-m", MODEL_PLAN_PATH,  # Use Mistral for planning
             "-t", perf_settings["threads"],
             "--ctx-size", perf_settings["ctx_size"],
             "--n-predict", gen_settings["n_predict"],
@@ -218,54 +208,22 @@ Respond ONLY with valid JSON.
             "-p", plan_prompt
         ]
 
-        # Add stop tokens if defined
-        if "stop" in gen_settings:
-            for stop in gen_settings["stop"]:
-                cmd.extend(["--stop", stop])
-
         logging.info(f"[Project Job {job_id}] Generating project plan...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         raw_output = result.stdout.strip()
 
-        # Extract JSON block
-        json_block = extract_first_json_block(raw_output)
-        if not json_block:
-            update_job_status(job_id, "error", "No valid JSON object found in output")
-            logging.error(f"[Project Job {job_id}] Raw output:\n{raw_output[:1000]}")
+        if not raw_output:
+            update_job_status(job_id, "error", "Planner model returned empty output")
+            logging.error(f"[Project Job {job_id}] Empty output")
             return
 
-        # Attempt to parse JSON
-        try:
-            plan = json.loads(json_block)
-        except JSONDecodeError as e:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            logging.error(f"Broken JSON snippet: {json_block[:1000]}")
-
-            if repair_json:
-                try:
-                    logging.info(f"[Project Job {job_id}] Attempting JSON repair...")
-                    fixed_json = repair_json(json_block)
-                    plan = json.loads(fixed_json)
-                except Exception as repair_err:
-                    update_job_status(job_id, "error", f"Invalid JSON after repair: {repair_err}")
-                    return
-            else:
-                update_job_status(job_id, "error", f"Invalid JSON: {e}")
-                return
-
-        # Validate JSON structure
-        if "files" not in plan or not isinstance(plan["files"], list):
-            update_job_status(job_id, "error", "Invalid plan format (missing 'files' key)")
-            logging.error(f"[Project Job {job_id}] Invalid plan structure: {plan}")
-            return
-
-        # Save plan.json
-        plan_path = os.path.join(project_folder, "plan.json")
+        # Save full plan as a text file
+        plan_path = os.path.join(project_folder, "plan.txt")
         with open(plan_path, "w") as f:
-            json.dump(plan, f, indent=2)
+            f.write(raw_output)
 
-        update_job_status(job_id, "done", f"Project plan created with {len(plan['files'])} files.")
-        logging.info(f"[Project Job {job_id}] Plan saved: {plan_path}")
+        update_job_status(job_id, "done", "Project plan created. Check plan.txt for details.")
+        logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
 
     except Exception as e:
         logging.error(f"[Project Job {job_id}] Error: {e}")
