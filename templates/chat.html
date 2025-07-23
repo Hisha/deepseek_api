@@ -1,28 +1,22 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>DeepSeek Chat</title>
-    <style>
-        body { font-family: monospace; background: #111; color: #ddd; padding: 2em; }
-        textarea, pre { width: 100%; }
-        textarea { height: 120px; background: #222; color: #ddd; border: none; padding: 1em; }
-        pre { white-space: pre-wrap; background: #1a1a1a; padding: 1em; border-radius: 5px; }
-        input[type="submit"] { padding: 0.5em 2em; margin-top: 1em; background: #333; color: #fff; border: none; }
-    </style>
-</head>
-<body>
-    <nav style="margin-bottom: 1em;">
-        <a href="/flux/" style="color: #00d4ff; margin-right: 20px; text-decoration:none;">Flux Dashboard</a>
-        <a href="/chat/" style="color: #00d4ff; text-decoration:none;">DeepSeek Chat</a>
-    </nav>
-    <h1>DeepSeek Code Assistant</h1>
-    <form method="post">
-        <textarea name="prompt" placeholder="Enter prompt here...">{{ prompt }}</textarea><br>
-        <input type="submit" value="Generate">
-    </form>
-    {% if output %}
-    <h2>Model Output:</h2>
-    <pre>{{ output }}</pre>
-    {% endif %}
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}DeepSeek Chat{% endblock %}
+
+{% block content %}
+<h2 class="text-xl font-bold mb-4">DeepSeek Code Assistant</h2>
+
+<form method="post" class="space-y-4">
+    <textarea name="prompt" placeholder="Enter your prompt here..."
+        class="w-full h-40 bg-gray-800 text-gray-200 p-3 rounded-md border border-gray-700">{{ prompt }}</textarea>
+    <br>
+    <input type="submit" value="Generate"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-md cursor-pointer">
+</form>
+
+{% if output %}
+<div class="mt-8">
+    <h3 class="text-lg font-semibold mb-2">Model Output:</h3>
+    <pre class="bg-gray-800 p-4 rounded-md text-sm text-gray-200 whitespace-pre-wrap">{{ output }}</pre>
+</div>
+{% endif %}
+{% endblock %}
