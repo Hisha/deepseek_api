@@ -1,0 +1,13 @@
+<div class="bg-gray-800 p-4 rounded-md mt-6">
+<h3 class="text-lg font-semibold mb-2">Job {{ job[0] }} Details</h3>
+<p><strong>Status:</strong> {{ job[2] }}</p>
+<p><strong>Prompt:</strong> {{ job[1] }}</p>
+{% if job[2] == 'done' %}
+    <h4 class="mt-4 mb-2 font-bold">Output:</h4>
+    <pre class="bg-gray-900 p-4 rounded text-sm text-gray-200 whitespace-pre-wrap">{{ job[3] }}</pre>
+{% elif job[2] == 'error' %}
+    <p class="text-red-500 mt-2">Error: {{ job[3] }}</p>
+{% else %}
+    <p class="text-yellow-400 mt-2">Processing or queued...</p>
+{% endif %}
+</div>
