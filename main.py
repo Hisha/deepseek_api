@@ -16,9 +16,9 @@ import json
 from json import JSONDecodeError
 
 try:
-    from json_repair import repair_json  # pip install json-repair (optional)
+    from json_repair import repair_json  # Optional: pip install json-repair
 except ImportError:
-    repair_json = None
+    repair_json = None  # Skip if not installed
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -54,7 +54,7 @@ def get_autotune_settings(prompt):
     available_ram_gb = psutil.virtual_memory().available / (1024**3)
 
     ctx_size = 4096
-    n_predict = 1024
+    n_predict = 900
     batch_size = 512
 
     if available_ram_gb > 128:
@@ -67,11 +67,8 @@ def get_autotune_settings(prompt):
         n_predict = 2048
         batch_size = 512
     else:
-        n_predict = 1024
+        n_predict = 900
         batch_size = 256
-
-    if len(prompt) > 1000 and n_predict < 4096:
-        n_predict = min(4096, n_predict + 512)
 
     return {
         "threads": str(cpu_threads),
@@ -94,7 +91,7 @@ def extract_json(text: str):
                 return text[start:i+1]
     return None
 
-# ----------------- Routes -----------------
+# ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
@@ -133,45 +130,46 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
         "output": message
     })
 
-# ----------------- Logic -----------------
+# ----------------- Core Logic -----------------
 def generate_plan(job_id, prompt):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
-    # 🔥 Escaped braces for f-string
+    # ✅ FINAL Prompt
     plan_prompt = f"""
-You are a senior software project planner.
+You are a software project planner. Based on this description: {prompt}
 
-Based on this description:
-{prompt}
-
-Return ONLY valid JSON using this structure:
+Generate ONLY valid JSON following this structure:
 {{
-  "project_name": "<short name>",
+  "project_name": "short descriptive name",
   "files": [
     {{
-      "path": "<file path>",
-      "description": "<what the file does>",
-      "prompt": "<specific instruction for generating the file>"
+      "path": "relative/file/path.ext",
+      "description": "purpose of this file",
+      "prompt": "specific and actionable instruction for generating the file"
     }}
   ]
 }}
 
 Rules:
-- Do NOT output anything outside JSON (no explanations, no code fences).
-- Fill in actual project_name and file details.
-- Include 5-12 files: main logic, config, templates, static assets, and README.
-- Use directories like templates/ and static/ when needed.
-- Include a dependencies file if required.
-- Output ONLY valid JSON.
+- Use the actual project description to decide file names and descriptions.
+- Output at least:
+  - One main entry point file.
+  - A file for dependencies (requirements.txt or similar).
+  - At least one documentation file (README.md).
+  - Templates or static folders if relevant.
+- Include 5–12 realistic files, not placeholders.
+- Use exact keys: "path", "description", "prompt".
+- Output ONLY JSON (no text outside JSON).
 """
 
     perf_settings = get_autotune_settings(plan_prompt)
+
     cmd = [
         LLAMA_PATH, "-m", MODEL_PLAN_PATH,
         "-t", perf_settings["threads"],
         "--ctx-size", perf_settings["ctx_size"],
-        "--n-predict", "1024",
+        "--n-predict", perf_settings["n_predict"],
         "--batch-size", perf_settings["batch_size"],
         "--temp", "0.2",
         "--repeat-penalty", "1.1",
@@ -197,7 +195,6 @@ Rules:
     try:
         plan = json.loads(json_block)
     except JSONDecodeError as e:
-        logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
         if repair_json:
             try:
                 fixed_json = repair_json(json_block)
@@ -206,6 +203,7 @@ Rules:
                 update_job_status(job_id, "error", "Invalid JSON after repair.")
                 return False
         else:
+            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
             update_job_status(job_id, "error", f"Invalid JSON: {e}")
             return False
 
