@@ -2,26 +2,8 @@
 {% block title %}Job Queue{% endblock %}
 {% block content %}
 <h2 class="text-xl font-bold mb-4">Job Queue</h2>
-<table class="table-auto w-full text-left border-collapse">
-<thead>
-<tr class="bg-gray-800 text-gray-200">
-<th class="p-2">ID</th>
-<th class="p-2">Prompt</th>
-<th class="p-2">Status</th>
-<th class="p-2">Created</th>
-<th class="p-2">Completed</th>
-</tr>
-</thead>
-<tbody>
-{% for job in jobs %}
-<tr class="border-b border-gray-700">
-<td class="p-2">{{ job[0] }}</td>
-<td class="p-2">{{ job[1][:40] }}...</td>
-<td class="p-2">{{ job[2] }}</td>
-<td class="p-2">{{ job[3] }}</td>
-<td class="p-2">{{ job[4] or '—' }}</td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
+
+<div id="jobs-table" hx-get="/jobs/table" hx-trigger="every 5s" hx-target="#jobs-table">
+    {% include "partials/job_table.html" %}
+</div>
 {% endblock %}
