@@ -60,6 +60,16 @@ async def jobs_page(request: Request):
     jobs = get_all_jobs()
     return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
 
+@app.get("/jobs/table", response_class=HTMLResponse)
+async def jobs_table(request: Request):
+    jobs = get_all_jobs()
+    return templates.TemplateResponse("partials/job_table.html", {"request": request, "jobs": jobs})
+
+@app.get("/job/{job_id}", response_class=HTMLResponse)
+async def job_detail(request: Request, job_id: int):
+    job = get_job(job_id)
+    return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
+
 #####################################################################################
 #                                   POST                                            #
 #####################################################################################
