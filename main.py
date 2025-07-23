@@ -126,8 +126,37 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
 #                                  Other                                            #
 #####################################################################################
 
+def get_task_settings(task):
+    presets = {
+        "plan": {
+            "temp": "0.1",
+            "repeat_penalty": "1.1",
+            "top_p": "0.8",
+            "n_predict": "768",
+            "stop": ["}\n"]
+        },
+        "file": {
+            "temp": "0.2",
+            "repeat_penalty": "1.05",
+            "top_p": "0.9",
+            "n_predict": "2048"
+        },
+        "doc": {
+            "temp": "0.3",
+            "repeat_penalty": "1.0",
+            "top_p": "0.95",
+            "n_predict": "1500"
+        }
+    }
+    return presets.get(task, presets["plan"])
+
 def process_project_job(job_id, prompt):
     try:
+        import json
+        import os
+        import logging
+        import subprocess
+
         project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
         os.makedirs(project_folder, exist_ok=True)
 
@@ -147,35 +176,56 @@ def process_project_job(job_id, prompt):
             {{"path": "README.md", "description": "Project overview and setup instructions"}}
           ]
         }}
-        Only return valid JSON. No extra text.
+        Respond ONLY with valid JSON and nothing else.
         """
 
-        settings = get_autotune_settings(plan_prompt)
+        # Get performance tuning and generation settings
+        perf_settings = get_autotune_settings(plan_prompt)  # threads, batch size, ctx size
+        gen_settings = get_task_settings("plan")  # JSON-focused behavior
+
         cmd = [
             LLAMA_PATH, "-m", MODEL_PATH,
-            "-t", settings["threads"],
-            "--ctx-size", settings["ctx_size"],
-            "--n-predict", settings["n_predict"],
-            "--batch-size", settings["batch_size"],
-            "--temp", "0.2", "--repeat-penalty", "1.1",
-            "--top-p", "0.95", "-p", plan_prompt
+            "-t", perf_settings["threads"],
+            "--ctx-size", perf_settings["ctx_size"],
+            "--n-predict", gen_settings["n_predict"],
+            "--batch-size", perf_settings["batch_size"],
+            "--temp", gen_settings["temp"],
+            "--repeat-penalty", gen_settings["repeat_penalty"],
+            "--top-p", gen_settings["top_p"],
+            "-p", plan_prompt
         ]
+
+        # Add stop sequences if defined
+        if "stop" in gen_settings:
+            for stop in gen_settings["stop"]:
+                cmd.extend(["--stop", stop])
 
         logging.info(f"[Project Job {job_id}] Generating project plan...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         raw_output = result.stdout.strip()
 
-        # Extract JSON safely
-        import json
-        start = raw_output.find("{")
-        end = raw_output.rfind("}")
-        if start == -1 or end == -1 or end <= start:
+        # --- Extract first valid JSON block ---
+        def extract_first_json_block(text: str) -> str:
+            start = text.find("{")
+            if start == -1:
+                return None
+            brace_count = 0
+            for i, char in enumerate(text[start:], start=start):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return text[start:i+1]
+            return None
+
+        json_block = extract_first_json_block(raw_output)
+        if not json_block:
             update_job_status(job_id, "error", "No valid JSON object found in output")
             logging.error(f"[Project Job {job_id}] Raw output:\n{raw_output[:1000]}")
             return
 
-        json_block = raw_output[start:end+1]
-
+        # Try to load JSON
         try:
             plan = json.loads(json_block)
         except json.JSONDecodeError as e:
@@ -201,6 +251,7 @@ def process_project_job(job_id, prompt):
     except Exception as e:
         logging.error(f"[Project Job {job_id}] Error: {e}")
         update_job_status(job_id, "error", str(e))
+
 
 def worker():
     logging.info("Worker thread started (Auto-Tune enabled)")
