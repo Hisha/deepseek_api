@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from db import add_job, init_db, get_all_jobs, get_job
+from db import add_job, init_db, get_all_jobs, get_job, update_job_status
 from threading import Thread
-import subprocess, time
 from datetime import datetime
+import subprocess, time, sqlite3
 
 app = FastAPI(root_path="/chat")
 templates = Jinja2Templates(directory="templates")
@@ -76,14 +76,3 @@ def worker():
                 "--n-predict", "768", "--temp", "0.2", "--repeat-penalty", "1.1",
                 "--top-p", "0.95", "-p", prompt
             ]
-
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                output = result.stdout
-                update_job_status(job_id, "done", output)
-            except subprocess.TimeoutExpired:
-                update_job_status(job_id, "error", "Job timed out.")
-        else:
-            time.sleep(3)
-
-Thread(target=worker, daemon=True).start()
