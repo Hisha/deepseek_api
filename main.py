@@ -20,7 +20,7 @@ try:
 except ImportError:
     repair_json = None  # Skip if not installed
 
-# Configure logging
+# ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(root_path="/chat")
@@ -30,13 +30,13 @@ eastern = pytz.timezone("US/Eastern")
 PROJECTS_DIR = "/home/smithkt/deepseek_projects"
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
-# Initialize database
 init_db()
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
 MODEL_CODE_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
 MODEL_PLAN_PATH = "/home/smithkt/models/mistral/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
 
+# ----------------- Helpers -----------------
 def format_local_time(iso_str):
     if not iso_str:
         return "—"
@@ -80,10 +80,7 @@ def get_autotune_settings(prompt):
         "batch_size": str(batch_size)
     }
 
-#####################################################################################
-#                                   GET                                             #
-#####################################################################################
-
+# ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
     return templates.TemplateResponse("chat.html", {
@@ -111,10 +108,6 @@ async def job_detail(request: Request, job_id: int):
 async def status():
     return JSONResponse({"status": "running", "worker": "active"})
 
-#####################################################################################
-#                                   POST                                            #
-#####################################################################################
-
 @app.post("/", response_class=HTMLResponse)
 async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
     job_type = "project" if generate_project else "chat"
@@ -126,22 +119,8 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
         "output": message
     })
 
-#####################################################################################
-#                                  UTILITIES                                        #
-#####################################################################################
-
-def get_task_settings(task):
-    presets = {
-        "plan": {
-            "temp": "0.1",
-            "repeat_penalty": "1.1",
-            "top_p": "0.8",
-            "n_predict": "1024"
-        }
-    }
-    return presets.get(task, presets["plan"])
-
-def extract_first_json_block(text: str) -> str:
+# ----------------- Logic -----------------
+def extract_json(text: str):
     start = text.find("{")
     if start == -1:
         return None
@@ -152,110 +131,95 @@ def extract_first_json_block(text: str) -> str:
         elif char == "}":
             brace_count -= 1
             if brace_count == 0:
-                return text[start:i + 1]
+                return text[start:i+1]
     return None
 
-#####################################################################################
-#                               PROJECT PLANNER                                     #
-#####################################################################################
-
 def generate_plan(job_id, prompt):
-    """Create a clean plan.json with 'files' array."""
-    try:
-        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
-        os.makedirs(project_folder, exist_ok=True)
+    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+    os.makedirs(project_folder, exist_ok=True)
 
-        plan_prompt = f"""
+    plan_prompt = f"""
 You are a software project planner.
 
-Generate ONLY valid JSON (no text outside JSON) in this exact format:
-
+Generate ONLY valid JSON (no text outside JSON) following this structure:
 {{
-  "project_name": "sample project",
+  "project_name": "string",
   "files": [
     {{
-      "path": "main_file.ext",
-      "description": "Main application entry point",
-      "prompt": "Write the core logic based on the project requirements."
-    }},
-    {{
-      "path": "ui/template.ext",
-      "description": "User interface template",
-      "prompt": "Create a responsive user interface using a standard UI framework."
+      "path": "string (file path)",
+      "description": "string (purpose of this file)",
+      "prompt": "string (instruction for generating code for this file)"
     }}
   ]
 }}
 
+Rules:
+- Use the actual project description to decide file names and descriptions.
+- Do NOT copy this schema literally. Fill in real values.
+- Output ONLY JSON, no explanations or extra text.
+
 Project description: {prompt}
 """
 
-        perf_settings = get_autotune_settings(plan_prompt)
-        gen_settings = get_task_settings("plan")
+    perf_settings = get_autotune_settings(plan_prompt)
+    cmd = [
+        LLAMA_PATH, "-m", MODEL_PLAN_PATH,
+        "-t", perf_settings["threads"],
+        "--ctx-size", perf_settings["ctx_size"],
+        "--n-predict", "1024",
+        "--batch-size", perf_settings["batch_size"],
+        "--temp", "0.2",
+        "--repeat-penalty", "1.1",
+        "--top-p", "0.9",
+        "-p", plan_prompt
+    ]
 
-        cmd = [
-            LLAMA_PATH, "-m", MODEL_PLAN_PATH,
-            "-t", perf_settings["threads"],
-            "--ctx-size", perf_settings["ctx_size"],
-            "--n-predict", gen_settings["n_predict"],
-            "--batch-size", perf_settings["batch_size"],
-            "--temp", gen_settings["temp"],
-            "--repeat-penalty", gen_settings["repeat_penalty"],
-            "--top-p", gen_settings["top_p"],
-            "-p", plan_prompt
-        ]
+    logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    raw_output = result.stdout.strip()
 
-        logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        raw_output = result.stdout.strip()
-
-        json_text = extract_first_json_block(raw_output)
-        if not json_text:
-            update_job_status(job_id, "error", "No valid JSON found in planner output")
-            logging.error(f"[Project Job {job_id}] Raw output:\n{raw_output[:1000]}")
-            return False
-
-        logging.info(f"[Project Job {job_id}] Raw JSON candidate:\n{json_text[:1000]}")
-
-        try:
-            plan = json.loads(json_text)
-        except JSONDecodeError as e:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            if repair_json:
-                try:
-                    logging.info("Attempting JSON repair...")
-                    fixed_json = repair_json(json_text)
-                    plan = json.loads(fixed_json)
-                except Exception as repair_err:
-                    update_job_status(job_id, "error", f"JSON repair failed: {repair_err}")
-                    return False
-            else:
-                update_job_status(job_id, "error", f"Invalid JSON: {e}")
-                return False
-
-        if "files" not in plan or not isinstance(plan["files"], list):
-            update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
-            logging.error(f"[Project Job {job_id}] Invalid plan structure: {plan}")
-            return False
-
-        plan_path = os.path.join(project_folder, "plan.json")
-        with open(plan_path, "w") as f:
-            json.dump(plan, f, indent=2)
-
-        update_job_status(job_id, "planned", f"Plan created with {len(plan['files'])} files.")
-        logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
-        return True
-
-    except Exception as e:
-        logging.error(f"[Project Job {job_id}] Error: {e}")
-        update_job_status(job_id, "error", str(e))
+    if not raw_output:
+        logging.error(f"[Project Job {job_id}] Planner returned empty output.")
+        update_job_status(job_id, "error", "Planner output empty or invalid.")
         return False
 
-#####################################################################################
-#                                  WORKER                                           #
-#####################################################################################
+    json_block = extract_json(raw_output)
+    if not json_block:
+        logging.error(f"[Project Job {job_id}] No JSON found. Raw output:\n{raw_output[:500]}")
+        update_job_status(job_id, "error", "No valid JSON found in output.")
+        return False
 
+    try:
+        plan = json.loads(json_block)
+    except JSONDecodeError as e:
+        if repair_json:
+            try:
+                fixed_json = repair_json(json_block)
+                plan = json.loads(fixed_json)
+            except Exception:
+                update_job_status(job_id, "error", "Invalid JSON after repair.")
+                return False
+        else:
+            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
+            update_job_status(job_id, "error", f"Invalid JSON: {e}")
+            return False
+
+    if "files" not in plan or not isinstance(plan["files"], list):
+        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
+        return False
+
+    # Save to plan.json
+    plan_path = os.path.join(project_folder, "plan.json")
+    with open(plan_path, "w") as f:
+        json.dump(plan, f, indent=2)
+
+    update_job_status(job_id, "planned", f"Plan saved with {len(plan['files'])} files.")
+    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
+    return True
+
+# ----------------- Worker -----------------
 def worker():
-    logging.info("Worker thread started (Auto-Tune enabled)")
+    logging.info("Worker thread started")
     while True:
         try:
             conn = sqlite3.connect("jobs.db")
@@ -268,15 +232,14 @@ def worker():
                 job_id, prompt, job_type = job
                 update_job_status(job_id, "processing")
 
-                if job_type == "chat":
-                    # Placeholder: implement later
-                    update_job_status(job_id, "done", "Chat completed.")
-                elif job_type == "project":
+                if job_type == "project":
                     generate_plan(job_id, prompt)
+                else:
+                    update_job_status(job_id, "error", "Chat job handler not implemented")
             else:
                 time.sleep(3)
         except Exception as e:
-            logging.error(f"Worker encountered an error: {e}")
+            logging.error(f"Worker error: {e}")
             time.sleep(5)
 
 Thread(target=worker, daemon=True).start()
