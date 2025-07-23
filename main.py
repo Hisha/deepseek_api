@@ -221,63 +221,69 @@ End your response with:
 
 
 def generate_files_from_plan(job_id):
-    """Stage 2: Read plan.txt, parse, and generate files using DeepSeek."""
-    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
-    plan_path = os.path.join(project_folder, "plan.txt")
+    try:
+        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+        plan_path = os.path.join(project_folder, "plan.txt")
 
-    if not os.path.exists(plan_path):
-        logging.error(f"[Project Job {job_id}] plan.txt not found.")
-        update_job_status(job_id, "error", "Plan file missing.")
-        return
+        if not os.path.exists(plan_path):
+            logging.error(f"[Project Job {job_id}] Missing plan.txt")
+            update_job_status(job_id, "error", "Plan file missing")
+            return
 
-    with open(plan_path, "r") as f:
-        plan_text = f.read()
+        # Read plan.txt and extract files with descriptions and prompts
+        with open(plan_path, "r") as f:
+            plan_content = f.read()
 
-    # Extract lines after "Files:" and before "END OF PLAN"
-    import re
-    file_entries = re.findall(r'path:\s*(.*?)\s*description:\s*(.*?)\s*prompt:\s*(.*?)(?=\n\d+\.|END OF PLAN)', plan_text, re.DOTALL)
-    if not file_entries:
-        logging.error(f"[Project Job {job_id}] No file entries found in plan.txt")
-        update_job_status(job_id, "error", "Failed to parse plan file.")
-        return
+        # Parse file entries (simple regex-based or split parsing)
+        import re
+        file_entries = re.findall(r"path:\s*(.+)\s+description:\s*(.+?)\s+prompt:\s*(.+?)(?=\n\d+\.|END OF PLAN)", plan_content, re.S)
 
-    for idx, (path, description, prompt) in enumerate(file_entries, start=1):
-        file_path = os.path.join(project_folder, path.strip())
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        if not file_entries:
+            update_job_status(job_id, "error", "No valid file entries found in plan.txt")
+            logging.error(f"[Project Job {job_id}] No file entries parsed")
+            return
 
-        logging.info(f"[Project Job {job_id}] Generating file {idx}: {path}")
+        for idx, (path, description, file_prompt) in enumerate(file_entries, start=1):
+            full_path = os.path.join(project_folder, path.strip())
 
-        gen_prompt = f"""
-You are a code generation assistant.
-Task: {description.strip()}
-Prompt: {prompt.strip()}
+            # Create parent directories if missing
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
-Write production-ready code for this file.
-"""
+            # Skip if this is clearly a directory
+            if full_path.endswith("/") or "." not in os.path.basename(full_path):
+                logging.info(f"[Project Job {job_id}] Skipping directory: {full_path}")
+                continue
 
-        settings = get_autotune_settings(gen_prompt)
-        cmd = [
-            LLAMA_PATH, "-m", MODEL_CODE_PATH,
-            "-t", settings["threads"],
-            "--ctx-size", settings["ctx_size"],
-            "--n-predict", "2048",
-            "--batch-size", settings["batch_size"],
-            "--temp", "0.2", "--repeat-penalty", "1.1",
-            "--top-p", "0.95", "-p", gen_prompt
-        ]
+            logging.info(f"[Project Job {job_id}] Generating file {idx}: {path.strip()}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        code_output = result.stdout.strip()
+            # Combine prompt with context
+            code_prompt = f"Generate the full code for: {description}\n\nDetails:\n{file_prompt}\n\nReturn ONLY the complete code."
 
-        if not code_output:
-            logging.warning(f"[Project Job {job_id}] Empty output for {path}")
-            continue
+            # Call DeepSeek to generate the file content
+            settings = get_autotune_settings(code_prompt)
+            cmd = [
+                LLAMA_PATH, "-m", MODEL_CODE_PATH,
+                "-t", settings["threads"],
+                "--ctx-size", settings["ctx_size"],
+                "--n-predict", settings["n_predict"],
+                "--batch-size", settings["batch_size"],
+                "--temp", "0.2", "--repeat-penalty", "1.1",
+                "--top-p", "0.95", "-p", code_prompt
+            ]
 
-        with open(file_path, "w") as f:
-            f.write(code_output)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            raw_code = result.stdout.strip()
 
-    update_job_status(job_id, "done", f"All files generated for job {job_id}.")
-    logging.info(f"[Project Job {job_id}] Files created successfully.")
+            # Save code to the file
+            with open(full_path, "w") as file:
+                file.write(raw_code)
+
+        update_job_status(job_id, "done", f"Generated {len(file_entries)} files from plan.")
+        logging.info(f"[Project Job {job_id}] All files created successfully.")
+
+    except Exception as e:
+        logging.error(f"[Project Job {job_id}] Error during file generation: {e}")
+        update_job_status(job_id, "error", str(e))
 
 def process_project_job(job_id, prompt):
     if generate_plan(job_id, prompt):
