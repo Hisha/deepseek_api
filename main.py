@@ -12,6 +12,13 @@ import pytz
 import os
 import psutil
 from dateutil import parser
+import json
+from json import JSONDecodeError
+
+try:
+    from json_repair import repair_json  # Optional: pip install json-repair
+except ImportError:
+    repair_json = None  # Skip if not installed
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -133,7 +140,7 @@ def get_task_settings(task):
             "repeat_penalty": "1.1",
             "top_p": "0.8",
             "n_predict": "768",
-            "stop": ["}\n"]
+            "stop": ["}\n", "\n\n"]
         },
         "file": {
             "temp": "0.2",
@@ -150,38 +157,53 @@ def get_task_settings(task):
     }
     return presets.get(task, presets["plan"])
 
+
+def extract_first_json_block(text: str) -> str:
+    start = text.find("{")
+    if start == -1:
+        return None
+    brace_count = 0
+    for i, char in enumerate(text[start:], start=start):
+        if char == "{":
+            brace_count += 1
+        elif char == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                return text[start:i + 1]
+    return None
+
+
 def process_project_job(job_id, prompt):
     try:
-        import json
-        import os
-        import logging
-        import subprocess
-
         project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
         os.makedirs(project_folder, exist_ok=True)
 
-        # 1. Generate project plan using DeepSeek
+        # STRONG JSON-ONLY PROMPT
         plan_prompt = f"""
-        Based on this project description: {prompt}
+You are a code generation assistant.
+Task: Based on this project description, output ONLY JSON that defines the file structure and purpose.
 
-        Generate a JSON plan for the file structure and what each file should contain.
-        Example format:
-        {{
-          "files": [
-            {{"path": "app.py", "description": "Flask entry point"}},
-            {{"path": "analyzer.py", "description": "Text analysis logic"}},
-            {{"path": "templates/upload.html", "description": "Upload form"}},
-            {{"path": "templates/analyze.html", "description": "Analysis results page"}},
-            {{"path": "requirements.txt", "description": "Dependencies list"}},
-            {{"path": "README.md", "description": "Project overview and setup instructions"}}
-          ]
-        }}
-        Respond ONLY with valid JSON and nothing else.
-        """
+Project: {prompt}
 
-        # Get performance tuning and generation settings
-        perf_settings = get_autotune_settings(plan_prompt)  # threads, batch size, ctx size
-        gen_settings = get_task_settings("plan")  # JSON-focused behavior
+Your response MUST:
+- Start immediately with '{{'
+- End immediately with '}}'
+- Follow this structure:
+{{
+  "files": [
+    {{"path": "app.py", "description": "Flask entry point"}},
+    {{"path": "templates/index.html", "description": "Main HTML template"}},
+    {{"path": "requirements.txt", "description": "Dependencies list"}}
+  ]
+}}
+
+Do NOT include any explanation, comments, or extra text.
+Respond ONLY with valid JSON.
+"""
+
+        # Combine performance and generation settings
+        perf_settings = get_autotune_settings(plan_prompt)  # From your autotune logic
+        gen_settings = get_task_settings("plan")
 
         cmd = [
             LLAMA_PATH, "-m", MODEL_PATH,
@@ -195,7 +217,7 @@ def process_project_job(job_id, prompt):
             "-p", plan_prompt
         ]
 
-        # Add stop sequences if defined
+        # Add stop tokens if defined
         if "stop" in gen_settings:
             for stop in gen_settings["stop"]:
                 cmd.extend(["--stop", stop])
@@ -204,43 +226,39 @@ def process_project_job(job_id, prompt):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         raw_output = result.stdout.strip()
 
-        # --- Extract first valid JSON block ---
-        def extract_first_json_block(text: str) -> str:
-            start = text.find("{")
-            if start == -1:
-                return None
-            brace_count = 0
-            for i, char in enumerate(text[start:], start=start):
-                if char == "{":
-                    brace_count += 1
-                elif char == "}":
-                    brace_count -= 1
-                    if brace_count == 0:
-                        return text[start:i+1]
-            return None
-
+        # Extract JSON block
         json_block = extract_first_json_block(raw_output)
         if not json_block:
             update_job_status(job_id, "error", "No valid JSON object found in output")
             logging.error(f"[Project Job {job_id}] Raw output:\n{raw_output[:1000]}")
             return
 
-        # Try to load JSON
+        # Attempt to parse JSON
         try:
             plan = json.loads(json_block)
-        except json.JSONDecodeError as e:
+        except JSONDecodeError as e:
             logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            logging.error(f"JSON candidate snippet: {json_block[:1000]}")
-            update_job_status(job_id, "error", f"Invalid JSON after cleanup: {e}")
-            return
+            logging.error(f"Broken JSON snippet: {json_block[:1000]}")
 
-        # Validate structure
+            if repair_json:
+                try:
+                    logging.info(f"[Project Job {job_id}] Attempting JSON repair...")
+                    fixed_json = repair_json(json_block)
+                    plan = json.loads(fixed_json)
+                except Exception as repair_err:
+                    update_job_status(job_id, "error", f"Invalid JSON after repair: {repair_err}")
+                    return
+            else:
+                update_job_status(job_id, "error", f"Invalid JSON: {e}")
+                return
+
+        # Validate JSON structure
         if "files" not in plan or not isinstance(plan["files"], list):
             update_job_status(job_id, "error", "Invalid plan format (missing 'files' key)")
             logging.error(f"[Project Job {job_id}] Invalid plan structure: {plan}")
             return
 
-        # Save plan to file
+        # Save plan.json
         plan_path = os.path.join(project_folder, "plan.json")
         with open(plan_path, "w") as f:
             json.dump(plan, f, indent=2)
@@ -251,7 +269,6 @@ def process_project_job(job_id, prompt):
     except Exception as e:
         logging.error(f"[Project Job {job_id}] Error: {e}")
         update_job_status(job_id, "error", str(e))
-
 
 def worker():
     logging.info("Worker thread started (Auto-Tune enabled)")
