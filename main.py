@@ -110,10 +110,10 @@ async def status():
 #####################################################################################
 
 @app.post("/", response_class=HTMLResponse)
-async def post_chat(request: Request, prompt: str = Form(...)):
-    job_id = add_job(prompt)
-    logging.info(f"New job queued: {job_id}")
-    message = f"Your job has been queued. Job ID: {job_id}"
+async def post_chat(request: Request, prompt: str = Form(...), project: str = Form(None)):
+    job_type = "project" if project else "chat"
+    job_id = add_job(prompt, job_type)
+    message = f"Your job has been queued as {job_type}. Job ID: {job_id}"
     return templates.TemplateResponse("chat.html", {
         "request": request,
         "prompt": "",
