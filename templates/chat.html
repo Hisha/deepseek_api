@@ -6,11 +6,16 @@
 <h2 class="text-xl font-bold mb-4">DeepSeek Code Assistant</h2>
 
 <form method="post" class="space-y-4">
-    <textarea name="prompt" placeholder="Enter your prompt here..."
-        class="w-full h-40 bg-gray-800 text-gray-200 p-3 rounded-md border border-gray-700">{{ prompt }}</textarea>
-    <br>
-    <input type="submit" value="Generate"
-        class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-md cursor-pointer">
+  <textarea name="prompt" class="w-full p-4 rounded bg-gray-800 text-white" rows="6" placeholder="Enter your prompt...">{{ prompt }}</textarea>
+
+  <div class="flex items-center space-x-2">
+    <input type="checkbox" id="generate_project" name="generate_project" class="form-checkbox">
+    <label for="generate_project">Generate full project (code files, folders, zip, etc)</label>
+  </div>
+
+  <button type="submit" class="px-6 py-2 bg-indigo-600 rounded hover:bg-indigo-700 text-white">
+    Submit
+  </button>
 </form>
 
 {% if output %}
