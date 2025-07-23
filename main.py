@@ -14,12 +14,6 @@ import psutil
 from dateutil import parser
 import json
 from json import JSONDecodeError
-import re
-
-try:
-    from json_repair import repair_json  # Optional: pip install json-repair
-except ImportError:
-    repair_json = None  # Fallback if not installed
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -80,23 +74,22 @@ def get_autotune_settings(prompt):
         "batch_size": str(batch_size)
     }
 
-def clean_llama_output(raw_text: str) -> str:
-    """Remove [INST]...[/INST] blocks from llama.cpp output."""
-    return re.sub(r"\[INST\].*?\[/INST\]", "", raw_text, flags=re.DOTALL).strip()
+def extract_after_inst(text: str):
+    """Extract everything after [/INST] and strip trailing junk like > EOF by user."""
+    if "[/INST]" in text:
+        text = text.split("[/INST]", 1)[-1].strip()
 
-def extract_last_json(text: str):
-    """Extract the last valid JSON block from text."""
-    matches = re.findall(r"\{(?:[^{}]|(?R))*\}", text, flags=re.DOTALL)
-    return matches[-1] if matches else None
+    # Remove > EOF by user or similar endings
+    eof_index = text.find("> EOF")
+    if eof_index != -1:
+        text = text[:eof_index].strip()
+
+    return text
 
 # ----------------- FastAPI Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": ""
-    })
+    return templates.TemplateResponse("chat.html", {"request": request, "prompt": "", "output": ""})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(request: Request):
@@ -122,11 +115,7 @@ async def post_chat(request: Request, prompt: str = Form(...), generate_project:
     job_type = "project" if generate_project else "chat"
     job_id = add_job(prompt, job_type)
     message = f"Your {job_type} job has been queued. Job ID: {job_id}"
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": message
-    })
+    return templates.TemplateResponse("chat.html", {"request": request, "prompt": "", "output": message})
 
 # ----------------- Logic -----------------
 def generate_plan(job_id, prompt):
@@ -182,47 +171,20 @@ Rules:
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    if not raw_output:
-        logging.error(f"[Project Job {job_id}] Planner returned empty output.")
-        update_job_status(job_id, "error", "Planner output empty or invalid.")
-        return False
+    # Extract JSON after [/INST]
+    json_candidate = extract_after_inst(raw_output)
 
-    # Clean and extract JSON
-    cleaned_output = clean_llama_output(raw_output)
-    json_block = extract_last_json(cleaned_output)
-
-    if not json_block:
-        logging.error(f"[Project Job {job_id}] No JSON found. Raw output:\n{raw_output[:500]}")
-        update_job_status(job_id, "error", "No valid JSON found in output.")
-        return False
-
-    try:
-        plan = json.loads(json_block)
-    except JSONDecodeError as e:
-        if repair_json:
-            try:
-                fixed_json = repair_json(json_block)
-                plan = json.loads(fixed_json)
-            except Exception:
-                update_job_status(job_id, "error", "Invalid JSON after repair.")
-                return False
-        else:
-            logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-            update_job_status(job_id, "error", f"Invalid JSON: {e}")
-            return False
-
-    if "files" not in plan or not isinstance(plan["files"], list):
-        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
-        return False
-
-    # Save to plan.json
+    # Save extracted portion
     plan_path = os.path.join(project_folder, "plan.json")
-    with open(plan_path, "w") as f:
-        json.dump(plan, f, indent=2)
-
-    update_job_status(job_id, "planned", f"Plan saved with {len(plan['files'])} files.")
-    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
-    return True
+    try:
+        parsed = json.loads(json_candidate)  # Validate
+        with open(plan_path, "w") as f:
+            json.dump(parsed, f, indent=2)
+        update_job_status(job_id, "planned", f"Plan saved with {len(parsed['files'])} files.")
+        logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
+    except JSONDecodeError as e:
+        logging.error(f"[Project Job {job_id}] Invalid JSON after extraction: {e}")
+        update_job_status(job_id, "error", "Invalid JSON after extraction.")
 
 # ----------------- Worker -----------------
 def worker():
