@@ -57,7 +57,7 @@ def get_all_jobs():
 def get_job(job_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, prompt, status, output, created_at, completed_at, progress, current_step FROM jobs WHERE id=?", (job_id,))
+    c.execute("SELECT id, prompt, type, status, output, created_at, completed_at, progress, current_step FROM jobs WHERE id=?", (job_id,))
     job = c.fetchone()
     conn.close()
     return job
