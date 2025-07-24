@@ -5,10 +5,10 @@ import logging
 import re
 
 def clean_code_output(raw_output):
-    """Removes markdown code fences and trims whitespace from LLM output."""
-    # Remove ``` and language hints
-    cleaned = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
-    cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"(user|assistant).*?\n", "", raw_output, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"> EOF by user", "", cleaned)
+    cleaned = re.sub(r"^```[a-zA-Z]*", "", cleaned.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"```$", "", cleaned)
     return cleaned.strip()
 
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
@@ -37,22 +37,18 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-        # ✅ Context-aware generation
         context_prompt = f"""
-You are an expert software engineer. Generate the COMPLETE, production-ready content for the file:
-{path}
+You are an expert software engineer. Generate COMPLETE, production-ready code for {path}.
 
-### Project Description:
+Project Description:
 {original_prompt}
 
-### Full Project Plan:
+Full Plan:
 {json.dumps(plan, indent=2)}
 
-### Rules:
-- Output ONLY the code for {path}. NO markdown, NO commentary.
-- Ensure imports, dependencies, and function names match other files.
-- If it's HTML, include full valid structure.
-- For config files (like requirements.txt), include complete dependencies.
+Rules:
+- Output ONLY code for {path}. No markdown, no commentary.
+- Ensure imports and references match other files.
 """
 
         progress = int((idx / total_files) * 100)
@@ -65,7 +61,7 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.25",  # Slightly lower temp for deterministic output
+            "--temp", "0.25",
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
@@ -75,16 +71,12 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
             raw_output = result.stdout.strip()
             cleaned_output = clean_code_output(raw_output)
+            if not cleaned_output:
+                cleaned_output = f"# ERROR: Empty output for {path}"
 
-            # ✅ If empty or weird output, fallback with a warning
-            if not cleaned_output or len(cleaned_output.splitlines()) < 2:
-                cleaned_output = f"# ERROR: LLM returned insufficient content for {path}\n"
-
-            # Write cleaned code to file
             with open(abs_path, "w") as out_file:
                 out_file.write(cleaned_output)
 
-            logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
