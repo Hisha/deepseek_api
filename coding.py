@@ -40,7 +40,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
-    validation_results = []  # Collect validation output here
+    validation_results = []  # Collect validation results for the report
 
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
@@ -75,7 +75,7 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.25",  # Lower temp for deterministic output
+            "--temp", "0.25",
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
@@ -94,14 +94,14 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
 
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
 
-            # ✅ Validation based on file type
-            if not cleaned_output.startswith("# ERROR"):
-                validation_results.append(validate_file(abs_path))
+            # ✅ Run validation depending on file type
+            validation_results.append(validate_file(abs_path, cleaned_output))
 
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
+            validation_results.append(f"[ERROR] {path}: Exception during generation -> {e}")
 
     # ✅ Write validation report
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
@@ -109,61 +109,82 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
         if validation_results:
             report.write("\n".join(validation_results))
         else:
-            report.write("No files were validated.\n")
+            report.write("No files validated.\n")
 
     update_job_status(job_id, "completed", f"All {total_files} files generated successfully. See VALIDATION_REPORT.txt.")
     logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
 
 
-def validate_file(file_path):
-    """
-    Detects file type and applies appropriate validation.
-    Returns a string result for the report.
-    """
+# ------------------- Validators -------------------
+
+def validate_file(file_path, content):
+    """Determine file type and run appropriate validation."""
     if file_path.endswith(".py"):
-        return validate_python_file(file_path)
+        return validate_python(file_path)
     elif file_path.endswith(".html"):
-        return validate_html_file(file_path)
-    elif file_path.endswith("Dockerfile"):
-        return "[INFO] Dockerfile validation: Manual review suggested."
+        return validate_html(file_path)
+    elif file_path.endswith(".cpp") or file_path.endswith(".cc"):
+        return validate_cpp(file_path)
     elif file_path.endswith(".php"):
-        return "[INFO] PHP validation placeholder (could add linting)."
-    elif file_path.endswith(".cpp"):
-        return validate_cpp_file(file_path)
+        return validate_php(file_path)
     elif file_path.endswith(".sql"):
-        return "[INFO] SQL validation placeholder (syntax validation can be added)."
+        return validate_sql(content, file_path)
+    elif "dockerfile" in file_path.lower():
+        return validate_dockerfile(content, file_path)
     else:
-        return f"[SKIPPED] No validation for {file_path}"
+        return f"[SKIPPED] {file_path}: No validator available."
 
 
-def validate_python_file(file_path):
-    """Runs syntax validation on Python files using py_compile."""
+def validate_python(file_path):
+    """Check Python syntax using py_compile."""
     try:
         subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
-        return f"[OK] {file_path} (Python syntax valid)"
+        return f"[OK] Python syntax valid -> {file_path}"
     except subprocess.CalledProcessError as e:
-        return f"[ERROR] {file_path}\n{e.output.decode('utf-8')}"
+        return f"[ERROR] Python syntax issue in {file_path}\n{e.output.decode('utf-8')}"
 
 
-def validate_html_file(file_path):
-    """Validates HTML files using tidy."""
+def validate_html(file_path):
+    """Validate HTML using tidy (if installed)."""
     try:
-        result = subprocess.run(["tidy", "-e", file_path], capture_output=True, text=True)
-        if result.stderr.strip():
-            return f"[HTML WARNINGS] {file_path}\n{result.stderr}"
-        return f"[OK] {file_path} (HTML valid)"
-    except FileNotFoundError:
-        return f"[SKIPPED] tidy not installed. {file_path}"
+        output = subprocess.check_output(["tidy", "-errors", "-quiet", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] HTML valid -> {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] HTML validation issues in {file_path}\n{e.output.decode('utf-8')}"
 
 
-def validate_cpp_file(file_path):
-    """Validates C++ files using g++ if available."""
+def validate_cpp(file_path):
+    """Validate C++ syntax using g++ (if available)."""
     try:
-        result = subprocess.run(["g++", "-fsyntax-only", file_path], capture_output=True, text=True)
-        if result.returncode == 0:
-            return f"[OK] {file_path} (C++ syntax valid)"
-        else:
-            return f"[ERROR] {file_path}\n{result.stderr}"
+        subprocess.check_output(["g++", "-fsyntax-only", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] C++ syntax valid -> {file_path}"
     except FileNotFoundError:
-        return f"[SKIPPED] g++ not installed. {file_path}"
+        return f"[SKIPPED] C++ validation skipped (g++ not installed) -> {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] C++ syntax issue in {file_path}\n{e.output.decode('utf-8')}"
+
+
+def validate_php(file_path):
+    """Validate PHP syntax using php -l."""
+    try:
+        output = subprocess.check_output(["php", "-l", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] PHP syntax valid -> {file_path}"
+    except FileNotFoundError:
+        return f"[SKIPPED] PHP validation skipped (php not installed) -> {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] PHP syntax issue in {file_path}\n{e.output.decode('utf-8')}"
+
+
+def validate_sql(content, file_path):
+    """Simple SQL validation placeholder."""
+    if ";" in content and "SELECT" in content.upper():
+        return f"[OK] SQL appears valid -> {file_path}"
+    return f"[WARNING] SQL content might be incomplete -> {file_path}"
+
+
+def validate_dockerfile(content, file_path):
+    """Simple Dockerfile validation placeholder."""
+    if "FROM" in content.upper():
+        return f"[OK] Dockerfile basic check passed -> {file_path}"
+    return f"[WARNING] Dockerfile may lack FROM instruction -> {file_path}"
