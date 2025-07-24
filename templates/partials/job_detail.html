@@ -1,6 +1,6 @@
 <div class="bg-gray-800 p-4 rounded-md mt-6"
      hx-get="{{ request.scope.root_path }}/job/{{ job[0] }}"
-     hx-trigger="every 30s"
+     hx-trigger="every 3s"
      hx-target="#job-detail"
      hx-swap="innerHTML">
     <h3 class="text-lg font-semibold mb-2">Job {{ job[0] }} Details</h3>
@@ -13,8 +13,6 @@
             <span class="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold">Queued</span>
         {% elif job[2] == 'error' %}
             <span class="bg-red-600 text-white px-2 py-1 rounded text-xs font-bold">Error</span>
-        {% else %}
-            <span class="bg-gray-500 text-white px-2 py-1 rounded text-xs font-bold">{{ job[2] }}</span>
         {% endif %}
     </p>
 
@@ -22,21 +20,19 @@
     <p><strong>Created:</strong> {{ job[4]|localtime }}</p>
     <p><strong>Completed:</strong> {{ job[5]|localtime }}</p>
 
-    {% if job[2] == 'processing' %}
-        <div class="mt-4">
-            <h4 class="font-semibold">Current Progress:</h4>
-            <div class="bg-gray-700 rounded h-4 w-full mt-2">
-                <div class="bg-yellow-500 h-4 rounded"
-                     style="width: {{ job[6] if job[6] else 0 }}%;"></div>
-            </div>
-            <p class="text-sm text-gray-300 mt-2">
-                {{ job[7] if job[7] else "Working..." }}
-            </p>
-        </div>
-    {% elif job[2] == 'completed' %}
-        <h4 class="mt-4 mb-2 font-bold">Download:</h4>
-        <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
-           class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Download ZIP</a>
+    {% if job[2] == 'completed' and job[3] %}
+        {% if job[1] and 'project' in job[1]|lower %}
+            <!-- Project Mode -->
+            <h4 class="mt-4 mb-2 font-bold">Download:</h4>
+            <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
+               class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Download ZIP</a>
+        {% else %}
+            <!-- Quick Mode -->
+            <h4 class="mt-4 mb-2 font-bold">Generated Code:</h4>
+            <pre class="bg-gray-900 p-4 rounded text-sm text-gray-200 whitespace-pre-wrap">{{ job[3] }}</pre>
+            <button class="bg-blue-600 text-white px-4 py-2 mt-2 rounded hover:bg-blue-700"
+                    onclick="navigator.clipboard.writeText(`{{ job[3] }}`)">Copy</button>
+        {% endif %}
     {% elif job[2] == 'error' %}
         <p class="text-red-500 mt-2">Error: {{ job[3] }}</p>
     {% else %}
