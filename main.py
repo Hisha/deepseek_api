@@ -62,25 +62,14 @@ def worker():
                 update_job_status(job_id, "processing", "Generating plan...")
 
                 if job_type == "project":
-                    # Phase 1: Generate Plan
                     success = planning.generate_plan(
-                        job_id,
-                        prompt,
-                        PROJECTS_DIR,
-                        LLAMA_PATH,
-                        MODEL_PLAN_PATH,
-                        update_job_status
+                        job_id, prompt, PROJECTS_DIR, LLAMA_PATH, MODEL_PLAN_PATH, update_job_status
                     )
 
                     if success:
                         update_job_status(job_id, "processing", "Generating code files...")
-                        # Phase 2: Generate Files
                         coding.generate_files(
-                            job_id,
-                            PROJECTS_DIR,
-                            LLAMA_PATH,
-                            MODEL_CODE_PATH,
-                            update_job_status
+                            job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status
                         )
 
                         # ✅ Create ZIP of the project
@@ -105,22 +94,14 @@ Thread(target=worker, daemon=True).start()
 # ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": ""
-    })
+    return templates.TemplateResponse("chat.html", {"request": request, "prompt": "", "output": ""})
 
 @app.post("/", response_class=HTMLResponse)
 async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
     job_type = "project" if generate_project else "chat"
     job_id = add_job(prompt, job_type)
     message = f"Your {job_type} job has been queued. Job ID: {job_id}"
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": message
-    })
+    return templates.TemplateResponse("chat.html", {"request": request, "prompt": "", "output": message})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(request: Request):
