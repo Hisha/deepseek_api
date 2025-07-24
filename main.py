@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from db import add_job, init_db, get_all_jobs, get_job, update_job_status
 from threading import Thread
@@ -13,7 +13,8 @@ import os
 import psutil
 from dateutil import parser
 import json
-import re
+import zipfile
+import shutil
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -28,8 +29,7 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 init_db()
 
 LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
-MODEL_PLAN_PATH = "/home/smithkt/models/mistral/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
-MODEL_CODE_PATH = "/home/smithkt/models/deepseek/deepseek-coder-6.7b-instruct.Q4_K_M.gguf"
+MODEL_QWEN_PATH = "/home/smithkt/models/qwen/qwen2.5-coder-14b-instruct-q4_0.gguf"
 
 # ----------------- Helpers -----------------
 def format_local_time(iso_str):
@@ -45,8 +45,8 @@ def format_local_time(iso_str):
 templates.env.filters["localtime"] = format_local_time
 
 def get_autotune_settings():
-    cpu_threads = os.cpu_count()
-    ctx_size = 4096
+    cpu_threads = min(28, os.cpu_count())  # Use 28 threads max
+    ctx_size = 8192
     batch_size = 512
     return {
         "threads": str(cpu_threads),
@@ -54,19 +54,11 @@ def get_autotune_settings():
         "batch_size": str(batch_size)
     }
 
-def extract_json_after_inst(text: str) -> str:
-    """Extract valid JSON after [/INST] and capture only the first { ... } block."""
-    # Remove everything before [/INST]
+def extract_after_inst(text: str) -> str:
     start = text.find("[/INST]")
-    if start != -1:
-        text = text[start + len("[/INST]"):]
-
-    text = text.strip()
-    # Use regex to grab first JSON object
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return match.group(0)
-    return text
+    if start == -1:
+        return text
+    return text[start + len("[/INST]"):].strip()
 
 # ----------------- Phase 1: Plan Generation -----------------
 def generate_plan(job_id, prompt):
@@ -74,9 +66,9 @@ def generate_plan(job_id, prompt):
     os.makedirs(project_folder, exist_ok=True)
 
     plan_prompt = f"""
-You are a software project planner. Based on this description: {prompt}
+You are a senior software architect. Based on this description: {prompt}
 
-Generate ONLY valid JSON following this structure:
+Generate ONLY valid JSON with this structure:
 {{
   "project_name": "short descriptive name",
   "files": [
@@ -89,54 +81,50 @@ Generate ONLY valid JSON following this structure:
 }}
 
 Rules:
-- Use the actual project description to decide file names and descriptions.
-- Output at least:
-  - One main entry point file.
-  - A file for dependencies (requirements.txt or similar).
-  - At least one documentation file (README.md).
-  - Templates or static folders if relevant.
-- Include 5–12 realistic files, not placeholders.
-- Use exact keys: "path", "description", "prompt".
-- Output ONLY JSON (no text outside JSON).
+- Use real filenames and directories relevant to the description.
+- Output 5–12 meaningful files (entry point, templates, static assets, tests, docs, config).
+- Include README.md and a dependencies file.
+- NO placeholders like main_file.ext.
+- Output ONLY JSON, no comments or extra text.
 """
 
-    perf_settings = get_autotune_settings()
+    perf = get_autotune_settings()
     cmd = [
-        LLAMA_PATH, "-m", MODEL_PLAN_PATH,
-        "-t", perf_settings["threads"],
-        "--ctx-size", perf_settings["ctx_size"],
-        "--n-predict", "900",
-        "--batch-size", perf_settings["batch_size"],
+        LLAMA_PATH, "-m", MODEL_QWEN_PATH,
+        "-t", perf["threads"],
+        "--ctx-size", perf["ctx_size"],
+        "--n-predict", "4096",
+        "--batch-size", perf["batch_size"],
         "--temp", "0.2",
         "--top-p", "0.9",
         "--repeat-penalty", "1.1",
         "-p", plan_prompt
     ]
 
-    logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    logging.info(f"[Project Job {job_id}] Generating plan.json...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     raw_output = result.stdout.strip()
 
-    # Extract JSON safely
-    json_block = extract_json_after_inst(raw_output)
+    # Extract after [/INST]
+    json_block = extract_after_inst(raw_output)
 
+    # Validate JSON
     try:
         plan = json.loads(json_block)
     except json.JSONDecodeError as e:
         logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-        update_job_status(job_id, "error", f"Invalid JSON: {e}")
+        update_job_status(job_id, "error", "Invalid JSON in plan.")
         return False
 
     if "files" not in plan or not isinstance(plan["files"], list):
-        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
+        update_job_status(job_id, "error", "Plan JSON missing 'files'.")
         return False
 
-    plan_path = os.path.join(project_folder, "plan.json")
-    with open(plan_path, "w") as f:
+    # Save
+    with open(os.path.join(project_folder, "plan.json"), "w") as f:
         json.dump(plan, f, indent=2)
 
-    update_job_status(job_id, "planned", f"Plan saved with {len(plan['files'])} files.")
-    logging.info(f"[Project Job {job_id}] Plan saved at {plan_path}")
+    update_job_status(job_id, "planned", f"Plan created with {len(plan['files'])} files.")
     return True
 
 # ----------------- Phase 2: File Generation -----------------
@@ -145,45 +133,65 @@ def generate_files(job_id):
     plan_path = os.path.join(project_folder, "plan.json")
 
     if not os.path.exists(plan_path):
-        update_job_status(job_id, "error", "Plan file missing.")
+        update_job_status(job_id, "error", "Plan missing.")
         return False
 
     with open(plan_path) as f:
         plan = json.load(f)
 
-    files = plan.get("files", [])
-    total_files = len(files)
-
+    files = plan["files"]
     for idx, file_info in enumerate(files, start=1):
         path = file_info["path"]
-        prompt = file_info["prompt"]
+        file_prompt = file_info["prompt"]
         abs_path = os.path.join(project_folder, path)
-
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        update_job_status(job_id, "processing", f"Generating file {idx}/{total_files}: {path}")
-        logging.info(f"[Project Job {job_id}] Generating file {idx}/{total_files}: {path}")
 
-        cmd = [
-            LLAMA_PATH, "-m", MODEL_CODE_PATH,
-            "-t", "12",
-            "--ctx-size", "4096",
-            "--n-predict", "2048",
-            "--temp", "0.3",
-            "--top-p", "0.9",
-            "--repeat-penalty", "1.05",
-            "-p", prompt
-        ]
+        attempt = 0
+        success = False
+        while attempt < 3 and not success:
+            update_job_status(job_id, "processing", f"Generating {path} (Attempt {attempt+1})")
+            logging.info(f"[Job {job_id}] Generating {path}...")
 
-        with open(abs_path, "w") as out_file:
-            proc = subprocess.Popen(cmd, stdout=out_file, stderr=subprocess.PIPE, text=True)
-            proc.wait()
+            cmd = [
+                LLAMA_PATH, "-m", MODEL_QWEN_PATH,
+                "-t", "28",
+                "--ctx-size", "8192",
+                "--n-predict", "4096",
+                "--temp", "0.3",
+                "--top-p", "0.9",
+                "--repeat-penalty", "1.05",
+                "-p", f"Generate ONLY the complete code for this file:\n{path}\n\nInstructions:\n{file_prompt}\n\nOutput ONLY code. No explanations."
+            ]
 
-    update_job_status(job_id, "completed", f"All {total_files} files generated.")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            raw_code = extract_after_inst(result.stdout.strip())
+
+            if raw_code and len(raw_code.splitlines()) > 3:
+                with open(abs_path, "w") as f:
+                    f.write(raw_code)
+                success = True
+            else:
+                attempt += 1
+
+        if not success:
+            logging.error(f"[Job {job_id}] Failed to generate {path} after retries.")
+
+    # Zip the project
+    zip_path = os.path.join(project_folder, "project.zip")
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        for root, dirs, files_in_dir in os.walk(project_folder):
+            for file in files_in_dir:
+                if file != "project.zip":
+                    full_path = os.path.join(root, file)
+                    arc_name = os.path.relpath(full_path, project_folder)
+                    zipf.write(full_path, arc_name)
+
+    update_job_status(job_id, "completed", f"Project ready. Download: project.zip")
     return True
 
 # ----------------- Worker -----------------
 def worker():
-    logging.info("Worker thread started")
+    logging.info("Worker started")
     while True:
         try:
             conn = sqlite3.connect("jobs.db")
@@ -200,7 +208,7 @@ def worker():
                     if generate_plan(job_id, prompt):
                         generate_files(job_id)
                 else:
-                    update_job_status(job_id, "error", "Chat job handler not implemented")
+                    update_job_status(job_id, "error", "Chat handler not implemented")
             else:
                 time.sleep(3)
         except Exception as e:
@@ -209,25 +217,16 @@ def worker():
 
 Thread(target=worker, daemon=True).start()
 
-# ----------------- Routes with HTMX -----------------
+# ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
 async def get_chat(request: Request):
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": ""
-    })
+    return templates.TemplateResponse("chat.html", {"request": request})
 
 @app.post("/", response_class=HTMLResponse)
 async def post_chat(request: Request, prompt: str = Form(...), generate_project: str = Form(None)):
     job_type = "project" if generate_project else "chat"
     job_id = add_job(prompt, job_type)
-    message = f"Your {job_type} job has been queued. Job ID: {job_id}"
-    return templates.TemplateResponse("chat.html", {
-        "request": request,
-        "prompt": "",
-        "output": message
-    })
+    return templates.TemplateResponse("chat.html", {"request": request, "output": f"Job {job_id} queued"})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(request: Request):
@@ -244,6 +243,9 @@ async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
     return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
 
-@app.get("/status")
-async def status():
-    return JSONResponse({"status": "running", "worker": "active"})
+@app.get("/download/{job_id}")
+async def download_project(job_id: int):
+    zip_path = os.path.join(PROJECTS_DIR, f"job_{job_id}/project.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(zip_path, filename=f"project_{job_id}.zip")
+    return JSONResponse({"error": "File not found"}, status_code=404)
