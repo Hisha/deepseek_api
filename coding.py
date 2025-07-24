@@ -5,7 +5,8 @@ import logging
 import re
 
 def clean_code_output(raw_output):
-    """Remove markdown fences and extra text."""
+    """Removes markdown code fences and trims whitespace from LLM output."""
+    # Remove ``` and language hints
     cleaned = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
     return cleaned.strip()
@@ -16,7 +17,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
     prompt_path = os.path.join(project_folder, "prompt.txt")
 
     if not os.path.exists(plan_path) or not os.path.exists(prompt_path):
-        update_job_status(job_id, "error", "Missing plan or original prompt.")
+        update_job_status(job_id, "error", "Missing plan.json or original prompt.")
         return False
 
     with open(plan_path) as f:
@@ -36,20 +37,22 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-        # Context-aware prompt
+        # ✅ Context-aware generation
         context_prompt = f"""
-You are an expert Python developer. Generate COMPLETE content for the file: {path}
+You are an expert software engineer. Generate the COMPLETE, production-ready content for the file:
+{path}
 
-Project Description:
+### Project Description:
 {original_prompt}
 
-Project Plan:
+### Full Project Plan:
 {json.dumps(plan, indent=2)}
 
-Rules:
-- Provide ONLY valid code (no markdown, no comments outside code).
-- Ensure imports and references match other files in this plan.
-- Implement the described functionality fully.
+### Rules:
+- Output ONLY the code for {path}. NO markdown, NO commentary.
+- Ensure imports, dependencies, and function names match other files.
+- If it's HTML, include full valid structure.
+- For config files (like requirements.txt), include complete dependencies.
 """
 
         progress = int((idx / total_files) * 100)
@@ -62,26 +65,31 @@ Rules:
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.3",
+            "--temp", "0.25",  # Slightly lower temp for deterministic output
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
-            cleaned_output = clean_code_output(result.stdout.strip())
-            if not cleaned_output:
-                cleaned_output = "# ERROR: Empty file generated"
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
+            raw_output = result.stdout.strip()
+            cleaned_output = clean_code_output(raw_output)
 
+            # ✅ If empty or weird output, fallback with a warning
+            if not cleaned_output or len(cleaned_output.splitlines()) < 2:
+                cleaned_output = f"# ERROR: LLM returned insufficient content for {path}\n"
+
+            # Write cleaned code to file
             with open(abs_path, "w") as out_file:
                 out_file.write(cleaned_output)
 
-            logging.info(f"[Job {job_id}] File saved: {path}")
+            logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    update_job_status(job_id, "completed", f"All {total_files} files generated.")
+    update_job_status(job_id, "completed", f"All {total_files} files generated successfully.")
+    logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
