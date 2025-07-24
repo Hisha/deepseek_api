@@ -49,7 +49,7 @@ def update_job_status(job_id, status, message=None, progress=None, current_step=
 def get_all_jobs():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, prompt, status, created_at, completed_at FROM jobs ORDER BY id DESC")
+    c.execute("SELECT id, prompt, type, status, created_at, completed_at FROM jobs ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -57,7 +57,10 @@ def get_all_jobs():
 def get_job(job_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, prompt, type, status, output, created_at, completed_at, progress, current_step FROM jobs WHERE id=?", (job_id,))
+    c.execute("""
+    SELECT id, prompt, type, status, output, created_at, completed_at, progress, current_step
+    FROM jobs WHERE id=?
+    """, (job_id,))
     job = c.fetchone()
     conn.close()
     return job
