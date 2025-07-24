@@ -3,6 +3,7 @@ import subprocess
 import json
 import logging
 import re
+from datetime import datetime
 
 def clean_code_output(raw_output):
     """
@@ -40,6 +41,14 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
+    validation_results = {
+        "Python": [],
+        "HTML": [],
+        "Dockerfile": [],
+        "SQL": [],
+        "C++": []
+    }
+
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
         abs_path = os.path.join(project_folder, path)
@@ -73,7 +82,7 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.25",
+            "--temp", "0.25",  # Lower temp for deterministic output
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
@@ -92,85 +101,103 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
 
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
 
+            # ✅ Validate based on file type
+            if path.endswith(".py"):
+                validation_results["Python"].append(validate_python_file(abs_path))
+            elif path.endswith(".html"):
+                validation_results["HTML"].append(validate_html_file(abs_path))
+            elif path.lower() == "dockerfile":
+                validation_results["Dockerfile"].append(validate_dockerfile(abs_path))
+            elif path.endswith(".sql"):
+                validation_results["SQL"].append(validate_sql_file(abs_path))
+            elif path.endswith(".cpp"):
+                validation_results["C++"].append(validate_cpp_file(abs_path))
+
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    # ✅ Validate all generated files
-    validation_report = validate_generated_files(project_folder, files)
-
-    # ✅ Save validation report
+    # ✅ Write enhanced validation report
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
     with open(report_path, "w") as report:
-        report.write("\n".join(validation_report))
+        report.write("=====================================\n")
+        report.write("PROJECT VALIDATION REPORT\n")
+        report.write(f"Job ID: {job_id}\n")
+        report.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report.write("=====================================\n\n")
+
+        # Summary
+        report.write("[ SUMMARY ]\n")
+        for section, results in validation_results.items():
+            ok_count = sum(1 for r in results if r.startswith("[OK]"))
+            error_count = sum(1 for r in results if r.startswith("[ERROR]"))
+            report.write(f"✔ {section}: {len(results)} files validated ({ok_count} OK, {error_count} ERROR)\n")
+        report.write("\n")
+
+        # Detailed sections
+        for section, results in validation_results.items():
+            if results:
+                report.write(f"------------------------------------------------\n[{section.upper()} FILES]\n")
+                for r in results:
+                    report.write(r + "\n")
+        report.write("\n")
 
     update_job_status(job_id, "completed", f"All {total_files} files generated successfully. See VALIDATION_REPORT.txt.")
     logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
 
 
-def validate_generated_files(project_folder, files):
-    validation_report = []
-    for file_info in files:
-        path = file_info.get("path")
-        abs_path = os.path.join(project_folder, path)
-        if not os.path.exists(abs_path):
-            validation_report.append(f"{path}: ERROR - File not found.")
-            continue
+# ----------------- VALIDATORS -----------------
+def validate_python_file(file_path):
+    try:
+        subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] {file_path}\n{e.output.decode('utf-8')}"
 
-        ext = os.path.splitext(path)[1].lower()
-        result = "OK"
 
-        try:
-            if ext == ".py":
-                proc = subprocess.run(["python3", "-m", "py_compile", abs_path],
-                                       capture_output=True, text=True)
-                if proc.returncode != 0:
-                    result = f"Python syntax error: {proc.stderr.strip()}"
+def validate_html_file(file_path):
+    try:
+        with open(file_path, "r") as f:
+            content = f.read()
+        if "<html" in content.lower() and "</html>" in content.lower():
+            return f"[OK] {file_path}"
+        else:
+            return f"[ERROR] {file_path}\nMissing <html> tags"
+    except Exception as e:
+        return f"[ERROR] {file_path}\n{str(e)}"
 
-            elif ext == ".html":
-                with open(abs_path) as f:
-                    content = f.read()
-                if "<html" not in content.lower() or "</html>" not in content.lower():
-                    result = "HTML structure warning: Missing <html> tags."
 
-            elif "dockerfile" in path.lower():
-                with open(abs_path) as f:
-                    content = f.read().upper()
-                if "FROM " not in content or ("CMD" not in content and "ENTRYPOINT" not in content):
-                    result = "Dockerfile warning: Missing FROM or CMD/ENTRYPOINT."
+def validate_dockerfile(file_path):
+    try:
+        result = subprocess.run(["docker", "build", "--dry-run", "-f", file_path, "."], capture_output=True, text=True)
+        if result.returncode == 0:
+            return f"[OK] {file_path}"
+        else:
+            return f"[ERROR] {file_path}\n{result.stderr.strip()}"
+    except FileNotFoundError:
+        return f"[ERROR] {file_path}\nDocker not installed, skipped."
 
-            elif ext == ".php":
-                try:
-                    proc = subprocess.run(["php", "-l", abs_path],
-                                           capture_output=True, text=True)
-                    if proc.returncode != 0:
-                        result = f"PHP syntax error: {proc.stderr.strip()}"
-                except FileNotFoundError:
-                    with open(abs_path) as f:
-                        content = f.read()
-                    if "<?php" not in content:
-                        result = "PHP warning: Missing <?php opening tag."
 
-            elif ext in [".cpp", ".cc", ".cxx"]:
-                try:
-                    proc = subprocess.run(["g++", "-fsyntax-only", abs_path],
-                                           capture_output=True, text=True)
-                    if proc.returncode != 0:
-                        result = f"C++ syntax error: {proc.stderr.strip()}"
-                except FileNotFoundError:
-                    result = "C++ validation skipped: g++ not installed."
+def validate_sql_file(file_path):
+    try:
+        with open(file_path, "r") as f:
+            content = f.read()
+        if ";" in content:  # Basic check
+            return f"[OK] {file_path}"
+        else:
+            return f"[ERROR] {file_path}\nNo SQL statements found"
+    except Exception as e:
+        return f"[ERROR] {file_path}\n{str(e)}"
 
-            elif ext == ".sql":
-                with open(abs_path) as f:
-                    content = f.read().upper()
-                if not any(keyword in content for keyword in ["CREATE", "SELECT", "INSERT", "UPDATE"]):
-                    result = "SQL warning: No common SQL statements found."
 
-        except Exception as e:
-            result = f"Validation error: {str(e)}"
-
-        validation_report.append(f"{path}: {result}")
-
-    return validation_report
+def validate_cpp_file(file_path):
+    try:
+        result = subprocess.run(["g++", "-fsyntax-only", file_path], capture_output=True, text=True)
+        if result.returncode == 0:
+            return f"[OK] {file_path}"
+        else:
+            return f"[ERROR] {file_path}\n{result.stderr.strip()}"
+    except FileNotFoundError:
+        return f"[ERROR] {file_path}\nG++ not installed, skipped."
