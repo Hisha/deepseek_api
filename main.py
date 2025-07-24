@@ -13,7 +13,7 @@ from dateutil import parser
 from db import add_job, init_db, get_all_jobs, get_job, update_job_status
 import planning
 import coding
-import quickmode  # ✅ New for Quick Mode
+import quickmode  # ✅ Quick mode handler
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -62,7 +62,6 @@ def worker():
                 logging.info(f"[Worker] Processing job {job_id} ({job_type})")
 
                 if job_type == "project":
-                    # ✅ Full project workflow
                     update_job_status(job_id, "processing", "Generating plan...")
                     success = planning.generate_plan(
                         job_id, prompt, PROJECTS_DIR, LLAMA_PATH, MODEL_PLAN_PATH, update_job_status
@@ -84,10 +83,7 @@ def worker():
                         update_job_status(job_id, "error", "Plan generation failed.")
 
                 elif job_type == "chat":
-                    # ✅ Quick mode workflow
-                    quickmode.generate_quick_code(
-                        job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_status
-                    )
+                    quickmode.generate_quick_code(job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_status)
 
             else:
                 time.sleep(3)
