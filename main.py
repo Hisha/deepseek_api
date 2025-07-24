@@ -10,8 +10,8 @@ import os
 import time
 from dateutil import parser
 from db import add_job, init_db, get_all_jobs, get_job, update_job_status
-import planning  # Phase 1 module
-import coding    # Phase 2 module
+import planning
+import coding
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -21,9 +21,14 @@ templates = Jinja2Templates(directory="templates")
 templates.env.globals["now"] = datetime.now
 
 eastern = pytz.timezone("US/Eastern")
-PROJECTS_DIR = "/home/smithkt/deepseek_projects"
-os.makedirs(PROJECTS_DIR, exist_ok=True)
 
+# ✅ Centralized constants
+PROJECTS_DIR = "/home/smithkt/deepseek_projects"
+LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
+MODEL_PLAN_PATH = "/home/smithkt/models/qwen/qwen2.5-coder-14b-instruct-q4_0.gguf"
+MODEL_CODE_PATH = "/home/smithkt/models/qwen/qwen2.5-coder-14b-instruct-q4_0.gguf"
+
+os.makedirs(PROJECTS_DIR, exist_ok=True)
 init_db()
 
 # ----------------- Helpers -----------------
@@ -52,16 +57,31 @@ def worker():
 
             if job:
                 job_id, prompt, job_type = job
-                update_job_status(job_id, "processing", "Starting plan generation...")
                 logging.info(f"[Worker] Processing job {job_id} ({job_type})")
+                update_job_status(job_id, "processing", "Generating plan...")
 
                 if job_type == "project":
                     # Phase 1: Generate Plan
-                    if planning.generate_plan(job_id, prompt):
-                        logging.info(f"[Worker] Plan created for job {job_id}. Moving to code generation...")
+                    success = planning.generate_plan(
+                        job_id,
+                        prompt,
+                        PROJECTS_DIR,
+                        LLAMA_PATH,
+                        MODEL_PLAN_PATH,
+                        update_job_status
+                    )
+
+                    if success:
                         update_job_status(job_id, "processing", "Generating code files...")
                         # Phase 2: Generate Files
-                        coding.generate_files(job_id)
+                        coding.generate_files(
+                            job_id,
+                            PROJECTS_DIR,
+                            LLAMA_PATH,
+                            MODEL_CODE_PATH,
+                            update_job_status
+                        )
+                        update_job_status(job_id, "completed", "Project generation complete.")
                     else:
                         update_job_status(job_id, "error", "Plan generation failed.")
                 else:
