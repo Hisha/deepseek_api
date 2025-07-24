@@ -11,6 +11,7 @@ import time
 from dateutil import parser
 from db import add_job, init_db, get_all_jobs, get_job, update_job_status
 import planning  # Phase 1 module
+import coding    # Phase 2 module
 
 # ----------------- Config -----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -51,10 +52,18 @@ def worker():
 
             if job:
                 job_id, prompt, job_type = job
-                update_job_status(job_id, "processing")
+                update_job_status(job_id, "processing", "Starting plan generation...")
+                logging.info(f"[Worker] Processing job {job_id} ({job_type})")
 
                 if job_type == "project":
-                    planning.generate_plan(job_id, prompt, update_job_status)
+                    # Phase 1: Generate Plan
+                    if planning.generate_plan(job_id, prompt):
+                        logging.info(f"[Worker] Plan created for job {job_id}. Moving to code generation...")
+                        update_job_status(job_id, "processing", "Generating code files...")
+                        # Phase 2: Generate Files
+                        coding.generate_files(job_id)
+                    else:
+                        update_job_status(job_id, "error", "Plan generation failed.")
                 else:
                     update_job_status(job_id, "error", "Chat job handler not implemented")
             else:
