@@ -7,14 +7,13 @@ def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, upd
     project_folder = os.path.join(projects_dir, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
-    # Save original prompt for Phase 2 context
     with open(os.path.join(project_folder, "prompt.txt"), "w") as f:
         f.write(prompt)
 
     plan_prompt = f"""
-You are a software project planner. Based on this description: {prompt}
+You are a senior software architect. Based on this description: {prompt}
 
-Generate ONLY valid JSON following this structure:
+Generate ONLY valid JSON in this format:
 {{
   "project_name": "short descriptive name",
   "files": [
@@ -27,15 +26,14 @@ Generate ONLY valid JSON following this structure:
 }}
 
 Rules:
-- Use the actual project description to decide file names and descriptions.
-- Output at least:
-  - One main entry point file.
-  - A file for dependencies (requirements.txt or similar).
-  - At least one documentation file (README.md).
-  - Templates or static folders if relevant.
-- Include 5–12 realistic files, not placeholders.
+- Must include at least:
+  - One main entry point file
+  - A dependency file (requirements.txt or similar)
+  - A README.md
+- Split code into logical modules: routes, config, utils, templates, static if relevant.
+- No arbitrary file count limit—add only necessary files for a production-ready implementation.
 - Use exact keys: "path", "description", "prompt".
-- Output ONLY JSON (no text outside JSON).
+- Output ONLY JSON (no markdown, no commentary).
 """
 
     cmd = [
@@ -53,18 +51,17 @@ Rules:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     raw_output = result.stdout.strip()
 
-    # Save raw output
     raw_path = os.path.join(project_folder, "plan_raw.txt")
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    # Extract JSON between ```json and ```
-    start = raw_output.find("```json")
-    end = raw_output.find("```", start + 7)
-    if start != -1 and end != -1:
-        json_block = raw_output[start + 7:end].strip()
-    else:
-        json_block = raw_output
+    # Extract JSON if wrapped in markdown
+    json_block = raw_output
+    if "```json" in raw_output:
+        start = raw_output.find("```json") + 7
+        end = raw_output.find("```", start)
+        if end > start:
+            json_block = raw_output[start:end].strip()
 
     try:
         plan = json.loads(json_block)
