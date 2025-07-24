@@ -54,7 +54,7 @@ def worker():
                 update_job_status(job_id, "processing")
 
                 if job_type == "project":
-                    planning.generate_plan(job_id, prompt)
+                    planning.generate_plan(job_id, prompt, update_job_status)
                 else:
                     update_job_status(job_id, "error", "Chat job handler not implemented")
             else:
