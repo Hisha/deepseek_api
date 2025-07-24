@@ -5,10 +5,25 @@ import logging
 import re
 
 def clean_code_output(raw_output):
-    cleaned = re.sub(r"(user|assistant).*?\n", "", raw_output, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"> EOF by user", "", cleaned)
+    """Clean LLM output for project files: remove preamble, fences, and extra artifacts."""
+    # 1. Remove everything before and including 'assistant'
+    cleaned = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
+
+    # 2. Remove lines like 'user', 'assistant'
+    cleaned = re.sub(r'^(user|assistant)\s*', '', cleaned, flags=re.MULTILINE)
+
+    # 3. Remove markdown code fences
     cleaned = re.sub(r"^```[a-zA-Z]*", "", cleaned.strip(), flags=re.MULTILINE)
-    cleaned = re.sub(r"```$", "", cleaned)
+    cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
+
+    # 4. Remove trailing artifacts like '> EOF by user'
+    cleaned = re.sub(r'> EOF by user', '', cleaned)
+
+    # 5. Trim leading junk before first code-like keyword
+    code_start = re.search(r'(#include|def |class |import |int main|public |function|\w+\s*=\s*)', cleaned)
+    if code_start:
+        cleaned = cleaned[code_start.start():]
+
     return cleaned.strip()
 
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
@@ -37,18 +52,22 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
+        # ✅ Context-aware prompt for code generation
         context_prompt = f"""
-You are an expert software engineer. Generate COMPLETE, production-ready code for {path}.
+You are an expert software engineer. Generate the COMPLETE, production-ready content for the file:
+{path}
 
-Project Description:
+### Project Description:
 {original_prompt}
 
-Full Plan:
+### Full Project Plan:
 {json.dumps(plan, indent=2)}
 
-Rules:
-- Output ONLY code for {path}. No markdown, no commentary.
-- Ensure imports and references match other files.
+### Rules:
+- Output ONLY the code for {path}. NO markdown, NO commentary.
+- Ensure imports, dependencies, and function names match other files.
+- If it's HTML, include full valid structure.
+- For config files (like requirements.txt), include complete dependencies.
 """
 
         progress = int((idx / total_files) * 100)
@@ -71,12 +90,14 @@ Rules:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
             raw_output = result.stdout.strip()
             cleaned_output = clean_code_output(raw_output)
-            if not cleaned_output:
-                cleaned_output = f"# ERROR: Empty output for {path}"
+
+            if not cleaned_output or len(cleaned_output.splitlines()) < 2:
+                cleaned_output = f"# ERROR: LLM returned insufficient content for {path}\n"
 
             with open(abs_path, "w") as out_file:
                 out_file.write(cleaned_output)
 
+            logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
