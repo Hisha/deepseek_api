@@ -17,11 +17,19 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
     files = plan.get("files", [])
     total_files = len(files)
 
-    for idx, file_info in enumerate(files, start=1):
-        path = file_info["path"]
-        prompt = file_info["prompt"]
-        abs_path = os.path.join(project_folder, path)
+    if total_files == 0:
+        update_job_status(job_id, "error", "No files found in plan.json.")
+        return False
 
+    for idx, file_info in enumerate(files, start=1):
+        path = file_info.get("path")
+        prompt = file_info.get("prompt", "").strip()
+
+        if not path or not prompt:
+            logging.warning(f"[Job {job_id}] Skipping file {idx} due to missing path or prompt.")
+            continue
+
+        abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
         progress = int((idx / total_files) * 100)
@@ -31,19 +39,24 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
 
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH,
-            "-t", "28",
-            "--ctx-size", "8192",
-            "--n-predict", "4096",
-            "--temp", "0.3",
+            "-t", "28",                # Threads
+            "--ctx-size", "8192",      # Context size for big models
+            "--n-predict", "4096",     # Allow big completions
+            "--temp", "0.2",           # Lower temp for deterministic code
             "--top-p", "0.9",
-            "--repeat-penalty", "1.05",
+            "--repeat-penalty", "1.1",
             "-p", prompt
         ]
 
-        with open(abs_path, "w") as out_file:
-            proc = subprocess.Popen(cmd, stdout=out_file, stderr=subprocess.PIPE, text=True)
-            proc.wait()
+        try:
+            with open(abs_path, "w") as out_file:
+                proc = subprocess.Popen(cmd, stdout=out_file, stderr=subprocess.PIPE, text=True)
+                proc.wait()
+        except Exception as e:
+            logging.error(f"[Job {job_id}] Error generating {path}: {e}")
+            update_job_status(job_id, "error", f"Failed to generate {path}")
+            return False
 
-    update_job_status(job_id, "completed", f"All {total_files} files generated.")
-    logging.info(f"[Job {job_id}] All files generated successfully.")
+    update_job_status(job_id, "completed", f"All {total_files} files generated successfully.")
+    logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
