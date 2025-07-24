@@ -5,26 +5,19 @@ import logging
 import re
 
 def clean_code_output(raw_output):
-    """Clean LLM output for project files: remove preamble, fences, and extra artifacts."""
-    # 1. Remove everything before and including 'assistant'
-    cleaned = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
+    """
+    Cleans raw LLM output for project files.
+    Removes:
+    - 'assistant' block
+    - '> EOF by user'
+    - Markdown code fences
+    """
+    raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
+    raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
+    raw_output = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
+    raw_output = re.sub(r"```$", "", raw_output, flags=re.MULTILINE)
+    return raw_output.strip()
 
-    # 2. Remove lines like 'user', 'assistant'
-    cleaned = re.sub(r'^(user|assistant)\s*', '', cleaned, flags=re.MULTILINE)
-
-    # 3. Remove markdown code fences
-    cleaned = re.sub(r"^```[a-zA-Z]*", "", cleaned.strip(), flags=re.MULTILINE)
-    cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
-
-    # 4. Remove trailing artifacts like '> EOF by user'
-    cleaned = re.sub(r'> EOF by user', '', cleaned)
-
-    # 5. Trim leading junk before first code-like keyword
-    code_start = re.search(r'(#include|def |class |import |int main|public |function|\w+\s*=\s*)', cleaned)
-    if code_start:
-        cleaned = cleaned[code_start.start():]
-
-    return cleaned.strip()
 
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
@@ -47,12 +40,14 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
+    validation_results = []  # Collect validation output here
+
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-        # ✅ Context-aware prompt for code generation
+        # ✅ Context-aware generation
         context_prompt = f"""
 You are an expert software engineer. Generate the COMPLETE, production-ready content for the file:
 {path}
@@ -80,7 +75,7 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.25",
+            "--temp", "0.25",  # Lower temp for deterministic output
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
@@ -98,11 +93,33 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
                 out_file.write(cleaned_output)
 
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
+
+            # ✅ Validate Python files only
+            if path.endswith(".py") and not cleaned_output.startswith("# ERROR"):
+                validation_results.append(validate_python_file(abs_path))
+
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    update_job_status(job_id, "completed", f"All {total_files} files generated successfully.")
+    # ✅ Write validation report
+    report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
+    with open(report_path, "w") as report:
+        if validation_results:
+            report.write("\n".join(validation_results))
+        else:
+            report.write("No Python files found for validation.\n")
+
+    update_job_status(job_id, "completed", f"All {total_files} files generated successfully. See VALIDATION_REPORT.txt.")
     logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
+
+
+def validate_python_file(file_path):
+    """Runs syntax validation on Python files using py_compile."""
+    try:
+        subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] {file_path}\n{e.output.decode('utf-8')}"
