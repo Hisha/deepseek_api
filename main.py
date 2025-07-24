@@ -118,7 +118,12 @@ async def jobs_table_partial(request: Request):
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
-    return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
+    job_type = job[2] if len(job) > 2 else "chat"  # <-- job[2] is the 'type' column
+    return templates.TemplateResponse("partials/job_detail.html", {
+        "request": request,
+        "job": job,
+        "job_type": job_type
+    })
 
 @app.get("/job/{job_id}/download")
 async def download_zip(job_id: int):
