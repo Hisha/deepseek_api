@@ -1,5 +1,4 @@
 import sqlite3
-import os
 from datetime import datetime
 
 DB_PATH = "jobs.db"
@@ -26,7 +25,11 @@ def init_db():
 def add_job(prompt, job_type):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO jobs (prompt, type, status) VALUES (?, ?, 'queued')", (prompt, job_type))
+    created_at = datetime.utcnow().isoformat()
+    c.execute("""
+        INSERT INTO jobs (prompt, type, status, created_at)
+        VALUES (?, ?, 'queued', ?)
+    """, (prompt, job_type, created_at))
     job_id = c.lastrowid
     conn.commit()
     conn.close()
