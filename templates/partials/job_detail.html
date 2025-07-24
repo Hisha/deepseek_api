@@ -9,9 +9,12 @@
     <p><strong>Created:</strong> {{ job[4]|localtime }}</p>
     <p><strong>Completed:</strong> {{ job[5]|localtime }}</p>
 
-    {% if job[2] == 'done' %}
-        <h4 class="mt-4 mb-2 font-bold">Output:</h4>
-        <pre class="bg-gray-900 p-4 rounded text-sm text-gray-200 whitespace-pre-wrap">{{ job[3] }}</pre>
+    {% if job[2] == 'completed' %}
+        <h4 class="mt-4 mb-2 font-bold">Download:</h4>
+        <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
+           class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+           Download Project ZIP
+        </a>
     {% elif job[2] == 'error' %}
         <p class="text-red-500 mt-2">Error: {{ job[3] }}</p>
     {% else %}
