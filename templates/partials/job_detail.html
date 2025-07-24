@@ -35,7 +35,7 @@
         </div>
     {% elif job[2] == 'completed' %}
         <h4 class="mt-4 mb-2 font-bold">Download:</h4>
-        <a href="{{ request.scope.root_path }}/download/{{ job[0] }}"
+        <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
            class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Download ZIP</a>
     {% elif job[2] == 'error' %}
         <p class="text-red-500 mt-2">Error: {{ job[3] }}</p>
