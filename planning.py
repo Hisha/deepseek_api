@@ -7,6 +7,10 @@ def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, upd
     project_folder = os.path.join(projects_dir, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
+    # Save original prompt for Phase 2 context
+    with open(os.path.join(project_folder, "prompt.txt"), "w") as f:
+        f.write(prompt)
+
     plan_prompt = f"""
 You are a software project planner. Based on this description: {prompt}
 
