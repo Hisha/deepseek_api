@@ -1,10 +1,10 @@
 import os
-import json
 import subprocess
+import json
 import logging
 
-def generate_files(job_id, projects_dir, llama_path, model_code_path, update_job_status):
-    project_folder = os.path.join(projects_dir, f"job_{job_id}")
+def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
+    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     plan_path = os.path.join(project_folder, "plan.json")
 
     if not os.path.exists(plan_path):
@@ -23,11 +23,14 @@ def generate_files(job_id, projects_dir, llama_path, model_code_path, update_job
         abs_path = os.path.join(project_folder, path)
 
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        update_job_status(job_id, "processing", f"Generating file {idx}/{total_files}: {path}")
-        logging.info(f"[Project Job {job_id}] Generating file {idx}/{total_files}: {path}")
+
+        progress = int((idx / total_files) * 100)
+        current_step = f"Generating file {idx}/{total_files}: {path}"
+        update_job_status(job_id, "processing", message=current_step, progress=progress, current_step=current_step)
+        logging.info(f"[Job {job_id}] {current_step}")
 
         cmd = [
-            llama_path, "-m", model_code_path,
+            LLAMA_PATH, "-m", MODEL_CODE_PATH,
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
@@ -42,5 +45,5 @@ def generate_files(job_id, projects_dir, llama_path, model_code_path, update_job
             proc.wait()
 
     update_job_status(job_id, "completed", f"All {total_files} files generated.")
-    logging.info(f"[Project Job {job_id}] Completed file generation.")
+    logging.info(f"[Job {job_id}] All files generated successfully.")
     return True
