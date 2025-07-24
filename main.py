@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from threading import Thread
 from datetime import datetime
@@ -8,6 +8,7 @@ import logging
 import pytz
 import os
 import time
+import shutil
 from dateutil import parser
 from db import add_job, init_db, get_all_jobs, get_job, update_job_status
 import planning
@@ -81,7 +82,14 @@ def worker():
                             MODEL_CODE_PATH,
                             update_job_status
                         )
+
+                        # ✅ Create ZIP of the project
+                        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+                        zip_path = os.path.join(project_folder, f"job_{job_id}.zip")
+                        shutil.make_archive(zip_path.replace(".zip", ""), 'zip', project_folder)
                         update_job_status(job_id, "completed", "Project generation complete.")
+                        logging.info(f"[Worker] Job {job_id} zipped at {zip_path}")
+
                     else:
                         update_job_status(job_id, "error", "Plan generation failed.")
                 else:
@@ -119,7 +127,20 @@ async def jobs_page(request: Request):
     jobs = get_all_jobs()
     return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
 
+@app.get("/jobs/table", response_class=HTMLResponse)
+async def jobs_table_partial(request: Request):
+    jobs = get_all_jobs()
+    return templates.TemplateResponse("partials/job_table.html", {"request": request, "jobs": jobs})
+
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
     return templates.TemplateResponse("partials/job_detail.html", {"request": request, "job": job})
+
+@app.get("/job/{job_id}/download")
+async def download_zip(job_id: int):
+    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+    zip_path = os.path.join(project_folder, f"job_{job_id}.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(zip_path, media_type="application/zip", filename=f"job_{job_id}.zip")
+    return HTMLResponse("<h1>ZIP file not found</h1>", status_code=404)
