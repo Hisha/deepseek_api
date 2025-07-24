@@ -40,14 +40,15 @@ def get_job(job_id):
     conn.close()
     return job
 
-def update_job_status(job_id, status, output=None):
-    conn = sqlite3.connect(DB_PATH)
+def update_job_status(job_id, status, message=None, progress=None, current_step=None):
+    conn = sqlite3.connect("jobs.db")
     c = conn.cursor()
-    if output:
-        c.execute("UPDATE jobs SET status = ?, output = ?, completed_at = ? WHERE id = ?",
-                  (status, output, datetime.utcnow().isoformat(), job_id))
+    if progress is not None or current_step is not None:
+        c.execute("UPDATE jobs SET status=?, output=?, progress=?, current_step=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                  (status, message, progress, current_step, job_id))
     else:
-        c.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+        c.execute("UPDATE jobs SET status=?, output=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                  (status, message, job_id))
     conn.commit()
     conn.close()
 
