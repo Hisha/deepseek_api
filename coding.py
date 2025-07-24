@@ -40,8 +40,6 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
-    validation_results = []  # Collect validation output here
-
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
         abs_path = os.path.join(project_folder, path)
@@ -75,7 +73,7 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
             "-t", "28",
             "--ctx-size", "8192",
             "--n-predict", "4096",
-            "--temp", "0.25",  # Lower temp for deterministic output
+            "--temp", "0.25",
             "--top-p", "0.9",
             "--repeat-penalty", "1.05",
             "-p", context_prompt
@@ -94,32 +92,85 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
 
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
 
-            # ✅ Validate Python files only
-            if path.endswith(".py") and not cleaned_output.startswith("# ERROR"):
-                validation_results.append(validate_python_file(abs_path))
-
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    # ✅ Write validation report
+    # ✅ Validate all generated files
+    validation_report = validate_generated_files(project_folder, files)
+
+    # ✅ Save validation report
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
     with open(report_path, "w") as report:
-        if validation_results:
-            report.write("\n".join(validation_results))
-        else:
-            report.write("No Python files found for validation.\n")
+        report.write("\n".join(validation_report))
 
     update_job_status(job_id, "completed", f"All {total_files} files generated successfully. See VALIDATION_REPORT.txt.")
     logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
 
 
-def validate_python_file(file_path):
-    """Runs syntax validation on Python files using py_compile."""
-    try:
-        subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
-        return f"[OK] {file_path}"
-    except subprocess.CalledProcessError as e:
-        return f"[ERROR] {file_path}\n{e.output.decode('utf-8')}"
+def validate_generated_files(project_folder, files):
+    validation_report = []
+    for file_info in files:
+        path = file_info.get("path")
+        abs_path = os.path.join(project_folder, path)
+        if not os.path.exists(abs_path):
+            validation_report.append(f"{path}: ERROR - File not found.")
+            continue
+
+        ext = os.path.splitext(path)[1].lower()
+        result = "OK"
+
+        try:
+            if ext == ".py":
+                proc = subprocess.run(["python3", "-m", "py_compile", abs_path],
+                                       capture_output=True, text=True)
+                if proc.returncode != 0:
+                    result = f"Python syntax error: {proc.stderr.strip()}"
+
+            elif ext == ".html":
+                with open(abs_path) as f:
+                    content = f.read()
+                if "<html" not in content.lower() or "</html>" not in content.lower():
+                    result = "HTML structure warning: Missing <html> tags."
+
+            elif "dockerfile" in path.lower():
+                with open(abs_path) as f:
+                    content = f.read().upper()
+                if "FROM " not in content or ("CMD" not in content and "ENTRYPOINT" not in content):
+                    result = "Dockerfile warning: Missing FROM or CMD/ENTRYPOINT."
+
+            elif ext == ".php":
+                try:
+                    proc = subprocess.run(["php", "-l", abs_path],
+                                           capture_output=True, text=True)
+                    if proc.returncode != 0:
+                        result = f"PHP syntax error: {proc.stderr.strip()}"
+                except FileNotFoundError:
+                    with open(abs_path) as f:
+                        content = f.read()
+                    if "<?php" not in content:
+                        result = "PHP warning: Missing <?php opening tag."
+
+            elif ext in [".cpp", ".cc", ".cxx"]:
+                try:
+                    proc = subprocess.run(["g++", "-fsyntax-only", abs_path],
+                                           capture_output=True, text=True)
+                    if proc.returncode != 0:
+                        result = f"C++ syntax error: {proc.stderr.strip()}"
+                except FileNotFoundError:
+                    result = "C++ validation skipped: g++ not installed."
+
+            elif ext == ".sql":
+                with open(abs_path) as f:
+                    content = f.read().upper()
+                if not any(keyword in content for keyword in ["CREATE", "SELECT", "INSERT", "UPDATE"]):
+                    result = "SQL warning: No common SQL statements found."
+
+        except Exception as e:
+            result = f"Validation error: {str(e)}"
+
+        validation_report.append(f"{path}: {result}")
+
+    return validation_report
