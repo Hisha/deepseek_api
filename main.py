@@ -118,7 +118,11 @@ async def jobs_table_partial(request: Request):
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: int):
     job = get_job(job_id)
-    job_type = job[2] if len(job) > 2 else "chat"  # <-- job[2] is the 'type' column
+    if not job:
+        return HTMLResponse("<h1>Job not found</h1>", status_code=404)
+
+    # Correct index for job_type
+    job_type = job[2]  # Since our SELECT order is: id, prompt, type, status...
     return templates.TemplateResponse("partials/job_detail.html", {
         "request": request,
         "job": job,
