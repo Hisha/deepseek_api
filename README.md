@@ -1,6 +1,6 @@
 # DeepSeek Chat Web Interface
 
-A lightweight FastAPI web application for running **DeepSeek-Coder 6.7B** locally using `llama.cpp`.  
+A lightweight FastAPI web application for running **Qwen 2.5-coder 14B** locally using `llama.cpp`.  
 Provides a simple interactive interface for code generation and integrates with Nginx for reverse proxy access.
 
 ---
