@@ -6,36 +6,36 @@
     <h3 class="text-lg font-semibold mb-2">Job {{ job[0] }} Details</h3>
 
     <p><strong>Status:</strong>
-        {% if job[2] == 'completed' %}
+        {% if job[3] == 'completed' %}
             <span class="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">Completed</span>
-        {% elif job[2] == 'processing' %}
+        {% elif job[3] == 'processing' %}
             <span class="bg-yellow-500 text-black px-2 py-1 rounded text-xs font-bold">Processing</span>
-        {% elif job[2] == 'queued' %}
+        {% elif job[3] == 'queued' %}
             <span class="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold">Queued</span>
-        {% elif job[2] == 'error' %}
+        {% elif job[3] == 'error' %}
             <span class="bg-red-600 text-white px-2 py-1 rounded text-xs font-bold">Error</span>
         {% endif %}
     </p>
 
     <p><strong>Prompt:</strong> {{ job[1] }}</p>
-    <p><strong>Created:</strong> {{ job[4]|localtime }}</p>
-    <p><strong>Completed:</strong> {{ job[5]|localtime }}</p>
+    <p><strong>Created:</strong> {{ job[5]|localtime }}</p>
+    <p><strong>Completed:</strong> {{ job[6]|localtime }}</p>
 
-    {% if job[2] == 'completed' and job[3] %}
-        {% if job_type == 'project' %}
-            <!-- Project Mode -->
+    {% if job[3] == 'completed' and job[4] %}
+        {% if job[2] == 'project' %}
+            <!-- ✅ Project Mode -->
             <h4 class="mt-4 mb-2 font-bold">Download:</h4>
             <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
                class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Download ZIP</a>
         {% else %}
-            <!-- Quick Mode -->
+            <!-- ✅ Quick Mode -->
             <h4 class="mt-4 mb-2 font-bold">Generated Code:</h4>
-            <pre class="bg-gray-900 p-4 rounded text-sm text-gray-200 whitespace-pre-wrap">{{ job[3] }}</pre>
+            <pre class="bg-gray-900 p-4 rounded text-sm text-gray-200 whitespace-pre-wrap">{{ job[4] }}</pre>
             <button class="bg-blue-600 text-white px-4 py-2 mt-2 rounded hover:bg-blue-700"
-                    onclick="navigator.clipboard.writeText(`{{ job[3] }}`)">Copy</button>
+                    onclick="navigator.clipboard.writeText(`{{ job[4] }}`)">Copy</button>
         {% endif %}
-    {% elif job[2] == 'error' %}
-        <p class="text-red-500 mt-2">Error: {{ job[3] }}</p>
+    {% elif job[3] == 'error' %}
+        <p class="text-red-500 mt-2">Error: {{ job[4] }}</p>
     {% else %}
         <p class="text-yellow-400 mt-2">Processing or queued...</p>
     {% endif %}
