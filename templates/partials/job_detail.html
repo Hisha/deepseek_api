@@ -22,7 +22,7 @@
     <p><strong>Completed:</strong> {{ job[5]|localtime }}</p>
 
     {% if job[2] == 'completed' and job[3] %}
-        {% if job_type == 'project' %}
+        {% if job[1] and job[1]|lower in ['project', 'generate project'] %}
             <!-- Project Mode -->
             <h4 class="mt-4 mb-2 font-bold">Download:</h4>
             <a href="{{ request.scope.root_path }}/job/{{ job[0] }}/download"
