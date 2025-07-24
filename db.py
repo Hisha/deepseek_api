@@ -1,4 +1,5 @@
 import sqlite3
+import os
 from datetime import datetime
 
 DB_PATH = "jobs.db"
@@ -9,46 +10,39 @@ def init_db():
     c.execute("""
     CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        prompt TEXT NOT NULL,
-        status TEXT NOT NULL,
+        prompt TEXT,
+        type TEXT,
+        status TEXT,
         output TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         completed_at TEXT,
-        type TEXT DEFAULT 'chat'
+        progress INTEGER DEFAULT 0,
+        current_step TEXT
     )
     """)
     conn.commit()
     conn.close()
 
-def add_job(prompt: str, job_type="chat") -> int:
+def add_job(prompt, job_type):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(
-        "INSERT INTO jobs (prompt, status, created_at, type) VALUES (?, 'queued', ?, ?)",
-        (prompt, datetime.utcnow().isoformat(), job_type)
-    )
+    c.execute("INSERT INTO jobs (prompt, type, status) VALUES (?, ?, 'queued')", (prompt, job_type))
     job_id = c.lastrowid
     conn.commit()
     conn.close()
     return job_id
 
-def get_job(job_id):
+def update_job_status(job_id, status, message=None, progress=None, current_step=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    job = c.fetchone()
-    conn.close()
-    return job
-
-def update_job_status(job_id, status, message=None, progress=None, current_step=None):
-    conn = sqlite3.connect("jobs.db")
-    c = conn.cursor()
-    if progress is not None or current_step is not None:
-        c.execute("UPDATE jobs SET status=?, output=?, progress=?, current_step=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                  (status, message, progress, current_step, job_id))
+    if status == "completed":
+        c.execute("""
+        UPDATE jobs SET status=?, output=?, completed_at=CURRENT_TIMESTAMP, progress=?, current_step=? WHERE id=?
+        """, (status, message, 100, None, job_id))
     else:
-        c.execute("UPDATE jobs SET status=?, output=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                  (status, message, job_id))
+        c.execute("""
+        UPDATE jobs SET status=?, output=?, progress=?, current_step=?, completed_at=NULL WHERE id=?
+        """, (status, message, progress, current_step, job_id))
     conn.commit()
     conn.close()
 
@@ -56,6 +50,14 @@ def get_all_jobs():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, prompt, status, created_at, completed_at FROM jobs ORDER BY id DESC")
-    jobs = c.fetchall()
+    rows = c.fetchall()
     conn.close()
-    return jobs
+    return rows
+
+def get_job(job_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, prompt, status, output, created_at, completed_at, progress, current_step FROM jobs WHERE id=?", (job_id,))
+    job = c.fetchone()
+    conn.close()
+    return job
