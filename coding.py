@@ -5,9 +5,9 @@ import logging
 import re
 
 def clean_code_output(raw_output):
-    """Removes markdown fences and trims whitespace."""
-    cleaned = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip())
-    cleaned = re.sub(r"```$", "", cleaned)
+    """Remove markdown fences and extra text."""
+    cleaned = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"```$", "", cleaned, flags=re.MULTILINE)
     return cleaned.strip()
 
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
@@ -36,19 +36,20 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-        # Context-aware generation
+        # Context-aware prompt
         context_prompt = f"""
-You are an expert developer. Generate the COMPLETE content for {path}.
+You are an expert Python developer. Generate COMPLETE content for the file: {path}
 
 Project Description:
 {original_prompt}
 
-Full Plan:
+Project Plan:
 {json.dumps(plan, indent=2)}
 
 Rules:
-- Provide ONLY code (no markdown, no extra text).
-- Ensure imports and references match other files.
+- Provide ONLY valid code (no markdown, no comments outside code).
+- Ensure imports and references match other files in this plan.
+- Implement the described functionality fully.
 """
 
         progress = int((idx / total_files) * 100)
