@@ -2,11 +2,27 @@ import os
 import json
 import subprocess
 import logging
+import re
+
+def extract_json_block(text):
+    """Extract JSON block from raw model output."""
+    # 1. Check for fenced JSON
+    fenced_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+    if fenced_match:
+        return fenced_match.group(1)
+
+    # 2. Otherwise, extract the first JSON object
+    brace_match = re.search(r"(\{[\s\S]*\})", text)
+    if brace_match:
+        return brace_match.group(1)
+
+    return None
 
 def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, update_job_status):
     project_folder = os.path.join(projects_dir, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
+    # Save original prompt for Phase 2 context
     with open(os.path.join(project_folder, "prompt.txt"), "w") as f:
         f.write(prompt)
 
@@ -51,17 +67,17 @@ Rules:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     raw_output = result.stdout.strip()
 
+    # Save raw output for debugging
     raw_path = os.path.join(project_folder, "plan_raw.txt")
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    # Extract JSON if wrapped in markdown
-    json_block = raw_output
-    if "```json" in raw_output:
-        start = raw_output.find("```json") + 7
-        end = raw_output.find("```", start)
-        if end > start:
-            json_block = raw_output[start:end].strip()
+    # ✅ Extract only the JSON block
+    json_block = extract_json_block(raw_output)
+    if not json_block:
+        logging.error(f"[Project Job {job_id}] No JSON block found in model output.")
+        update_job_status(job_id, "error", "Could not extract JSON from plan output.")
+        return False
 
     try:
         plan = json.loads(json_block)
@@ -70,6 +86,7 @@ Rules:
         update_job_status(job_id, "error", "Invalid JSON in plan.")
         return False
 
+    # Save parsed plan
     plan_path = os.path.join(project_folder, "plan.json")
     with open(plan_path, "w") as f:
         json.dump(plan, f, indent=2)
