@@ -1,37 +1,10 @@
-import subprocess
 import os
 import json
+import subprocess
 import logging
-import sqlite3
 
-# ----------------- Config -----------------
-LLAMA_PATH = "/home/smithkt/llama.cpp/build/bin/llama-cli"
-MODEL_PLAN_PATH = "/home/smithkt/models/qwen/qwen2.5-coder-14b-instruct-q4_0.gguf"
-PROJECTS_DIR = "/home/smithkt/deepseek_projects"
-os.makedirs(PROJECTS_DIR, exist_ok=True)
-
-def extract_json_from_output(raw_output: str) -> str:
-    """
-    Extract JSON block from Qwen's output (between ```json and ```).
-    If not found, attempt fallback by finding first '{' and last '}'.
-    """
-    if "```json" in raw_output:
-        start = raw_output.find("```json") + len("```json")
-        end = raw_output.find("```", start)
-        if end != -1:
-            return raw_output[start:end].strip()
-    # Fallback: find first '{' and last '}'
-    start = raw_output.find("{")
-    end = raw_output.rfind("}")
-    if start != -1 and end != -1:
-        return raw_output[start:end+1].strip()
-    return ""
-
-def generate_plan(job_id, prompt, update_job_status):
-    """
-    Runs Qwen to generate a project plan and saves raw + cleaned JSON.
-    """
-    project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, update_job_status):
+    project_folder = os.path.join(projects_dir, f"job_{job_id}")
     os.makedirs(project_folder, exist_ok=True)
 
     plan_prompt = f"""
@@ -62,7 +35,7 @@ Rules:
 """
 
     cmd = [
-        LLAMA_PATH, "-m", MODEL_PLAN_PATH,
+        llama_path, "-m", model_plan_path,
         "-t", "28",
         "--ctx-size", "8192",
         "--n-predict", "4096",
@@ -72,8 +45,8 @@ Rules:
         "-p", plan_prompt
     ]
 
-    logging.info(f"[Project Job {job_id}] Running Qwen for plan generation...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)  # Allow long runs
+    logging.info(f"[Project Job {job_id}] Generating structured plan.json...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     raw_output = result.stdout.strip()
 
     # Save raw output
@@ -81,26 +54,21 @@ Rules:
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    # Extract JSON
-    json_block = extract_json_from_output(raw_output)
-    if not json_block:
-        logging.error(f"[Project Job {job_id}] No JSON found in output.")
-        update_job_status(job_id, "error", "No valid JSON found in output.")
-        return False
+    # Extract JSON between ```json and ```
+    start = raw_output.find("```json")
+    end = raw_output.find("```", start + 7)
+    if start != -1 and end != -1:
+        json_block = raw_output[start + 7:end].strip()
+    else:
+        json_block = raw_output
 
-    # Validate JSON
     try:
         plan = json.loads(json_block)
     except json.JSONDecodeError as e:
         logging.error(f"[Project Job {job_id}] JSON decode error: {e}")
-        update_job_status(job_id, "error", f"Invalid JSON in plan. Check plan_raw.txt.")
+        update_job_status(job_id, "error", "Invalid JSON in plan.")
         return False
 
-    if "files" not in plan or not isinstance(plan["files"], list):
-        update_job_status(job_id, "error", "Plan JSON missing 'files' key.")
-        return False
-
-    # Save plan.json
     plan_path = os.path.join(project_folder, "plan.json")
     with open(plan_path, "w") as f:
         json.dump(plan, f, indent=2)
