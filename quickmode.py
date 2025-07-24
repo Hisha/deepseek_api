@@ -1,16 +1,18 @@
 import subprocess
 import logging
 import re
-import os
 
 def clean_code_output(raw_output):
-    """Remove markdown fences and trim whitespace."""
-    cleaned = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
+    """Remove extra text, markdown fences, and system prompts from LLM output."""
+    # Remove user/assistant markers and EOF markers
+    cleaned = re.sub(r"(user|assistant).*?\n", "", raw_output, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"> EOF by user", "", cleaned)
+    # Remove markdown code fences
+    cleaned = re.sub(r"^```[a-zA-Z]*", "", cleaned.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"```$", "", cleaned)
     return cleaned.strip()
 
 def generate_quick_code(job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
-    """Generates a single code snippet for quick mode jobs."""
     update_job_status(job_id, "processing", "Generating quick snippet...")
     logging.info(f"[QuickMode Job {job_id}] Generating code snippet...")
 
@@ -33,7 +35,6 @@ def generate_quick_code(job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_
         if not cleaned_output:
             cleaned_output = "# ERROR: Empty snippet generated."
 
-        # No files, just store the output
         update_job_status(job_id, "completed", cleaned_output)
         logging.info(f"[QuickMode Job {job_id}] Quick code generated successfully.")
         return True
