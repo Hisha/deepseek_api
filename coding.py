@@ -5,9 +5,9 @@ import logging
 import re
 from datetime import datetime
 
-# ===========================
-# CLEANUP RAW MODEL OUTPUT
-# ===========================
+# --------------------------
+# CLEAN OUTPUT
+# --------------------------
 def clean_code_output(raw_output):
     """
     Cleans raw LLM output for project files.
@@ -22,9 +22,10 @@ def clean_code_output(raw_output):
     raw_output = re.sub(r"```$", "", raw_output, flags=re.MULTILINE)
     return raw_output.strip()
 
-# ===========================
-# MAIN FILE GENERATION LOGIC
-# ===========================
+
+# --------------------------
+# MAIN GENERATE FUNCTION
+# --------------------------
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     plan_path = os.path.join(project_folder, "plan.json")
@@ -46,7 +47,14 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
-    validation_results = []  # Collect validation output
+    validation_results = {
+        "python": [],
+        "cpp": [],
+        "html": [],
+        "docker": [],
+        "sql": [],
+        "placeholders": []
+    }
 
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
@@ -100,8 +108,22 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
 
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
 
-            # ✅ Validate by file type
-            validation_results.append(validate_file(abs_path))
+            # ✅ Run validation per file type
+            if path.endswith(".py") and not cleaned_output.startswith("# ERROR"):
+                validation_results["python"].append(validate_python(abs_path))
+            elif path.endswith(".cpp") or path.endswith(".h"):
+                validation_results["cpp"].append(validate_cpp(abs_path))
+            elif path.endswith(".html"):
+                validation_results["html"].append(validate_html(abs_path))
+            elif path.lower() == "dockerfile":
+                validation_results["docker"].append(validate_docker(abs_path))
+            elif path.endswith(".sql"):
+                validation_results["sql"].append(validate_sql(abs_path))
+
+            # ✅ Check for placeholders
+            placeholder_warn = scan_placeholders(abs_path)
+            if placeholder_warn:
+                validation_results["placeholders"].append(placeholder_warn)
 
         except Exception as e:
             logging.error(f"[Job {job_id}] Error generating {path}: {e}")
@@ -109,99 +131,97 @@ You are an expert software engineer. Generate the COMPLETE, production-ready con
                 out_file.write(f"# ERROR: {e}")
 
     # ✅ Write validation report
-    write_validation_report(job_id, project_folder, validation_results)
-
+    write_validation_report(job_id, project_folder, validation_results, total_files)
     update_job_status(job_id, "completed", f"All {total_files} files generated successfully. See VALIDATION_REPORT.txt.")
     logging.info(f"[Job {job_id}] ✅ All files generated successfully.")
     return True
 
-# ===========================
-# VALIDATION LOGIC
-# ===========================
-def validate_file(file_path):
-    """Validate files by type and return status string."""
-    if file_path.endswith(".py"):
-        return validate_python(file_path)
-    elif file_path.endswith(".html"):
-        return validate_html(file_path)
-    elif file_path.lower() == "dockerfile":
-        return validate_dockerfile(file_path)
-    elif file_path.endswith(".sql"):
-        return validate_sql(file_path)
-    elif file_path.endswith(".cpp") or file_path.endswith(".hpp"):
-        return validate_cpp(file_path)
-    else:
-        return f"[INFO] {file_path} (No validator available)"
 
+# --------------------------
+# VALIDATION FUNCTIONS
+# --------------------------
 def validate_python(file_path):
     try:
         subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
         return f"[OK] {file_path}"
     except subprocess.CalledProcessError as e:
-        return f"[ERROR: Syntax] {file_path}\n  -> {e.output.decode('utf-8')}"
+        return f"[ERROR] {file_path}\n  -> {e.output.decode('utf-8')}"
+
+
+def validate_cpp(file_path):
+    if not shutil.which("g++"):
+        return f"[WARN] {file_path}\n  -> g++ not installed, skipping validation"
+    try:
+        subprocess.check_output(["g++", "-fsyntax-only", file_path], stderr=subprocess.STDOUT)
+        return f"[OK] {file_path}"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] {file_path}\n  -> {e.output.decode('utf-8')}"
+
 
 def validate_html(file_path):
     try:
-        result = subprocess.run(["tidy", "-e", file_path], capture_output=True, text=True)
+        result = subprocess.run(["tidy", "-q", "-e", file_path], capture_output=True, text=True)
         if result.returncode == 0:
             return f"[OK] {file_path}"
-        else:
-            warnings = result.stderr.strip()
-            return f"[INFO] {file_path}\n  -> {warnings}"
+        return f"[WARN] {file_path}\n  -> {result.stderr.strip()}"
     except FileNotFoundError:
-        return f"[INFO] {file_path} (tidy not installed)"
+        return f"[WARN] {file_path}\n  -> tidy not installed"
 
-def validate_dockerfile(file_path):
-    return f"[INFO] {file_path} (Dockerfile lint not implemented yet)"
+
+def validate_docker(file_path):
+    # Basic check: file is not empty and has FROM
+    with open(file_path) as f:
+        content = f.read()
+    if "FROM" in content:
+        return f"[OK] {file_path}"
+    return f"[WARN] {file_path}\n  -> Missing FROM statement"
+
 
 def validate_sql(file_path):
-    return f"[INFO] {file_path} (SQL validation not implemented yet)"
-
-def validate_cpp(file_path):
     try:
-        result = subprocess.run(["g++", "-fsyntax-only", file_path], capture_output=True, text=True)
+        result = subprocess.run(["sqlite3", ":memory:", f".read {file_path}"], capture_output=True, text=True)
         if result.returncode == 0:
             return f"[OK] {file_path}"
-        else:
-            if "No such file or directory" in result.stderr:
-                missing = re.findall(r"fatal error: (.*): No such file", result.stderr)
-                if missing:
-                    return f"[ERROR: Missing Dependency] {file_path}\n  -> Missing dependency: {missing[0]}"
-            return f"[ERROR: Syntax] {file_path}\n  -> {result.stderr.strip()}"
-    except FileNotFoundError:
-        return f"[INFO] {file_path} (g++ not installed)"
+        return f"[ERROR] {file_path}\n  -> {result.stderr.strip()}"
+    except Exception as e:
+        return f"[WARN] {file_path}\n  -> sqlite3 not installed or failed: {e}"
 
-# ===========================
-# REPORT GENERATOR
-# ===========================
-def write_validation_report(job_id, project_folder, results):
+
+def scan_placeholders(file_path):
+    with open(file_path) as f:
+        content = f.read()
+    if re.search(r"\b(TODO|FIXME|PLACEHOLDER)\b", content, re.IGNORECASE):
+        return f"[WARN] {file_path} contains placeholder text"
+    return None
+
+
+# --------------------------
+# REPORT GENERATION
+# --------------------------
+def write_validation_report(job_id, project_folder, results, total_files):
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     with open(report_path, "w") as report:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report.write("=============================\n")
-        report.write(f"PROJECT VALIDATION REPORT\nJob ID: {job_id}\nGenerated: {timestamp}\n")
+        report.write(f"PROJECT VALIDATION REPORT\nJob ID: {job_id}\nGenerated: {now}\n")
         report.write("=============================\n\n")
 
-        # Group by type
-        sections = {"PYTHON": [], "HTML": [], "DOCKERFILE": [], "SQL": [], "CPP": [], "OTHER": []}
-        for r in results:
-            if ".py" in r:
-                sections["PYTHON"].append(r)
-            elif ".html" in r:
-                sections["HTML"].append(r)
-            elif "Dockerfile" in r:
-                sections["DOCKERFILE"].append(r)
-            elif ".sql" in r:
-                sections["SQL"].append(r)
-            elif ".cpp" in r or ".hpp" in r:
-                sections["CPP"].append(r)
-            else:
-                sections["OTHER"].append(r)
+        report.write("[ SUMMARY ]\n")
+        report.write(f"✔ Total Files: {total_files}\n")
+        for key, files in results.items():
+            if files:
+                report.write(f"✔ {key.upper()}: {len(files)} files checked\n")
+        report.write("\n------------------------------------------------\n")
 
-        for category, items in sections.items():
-            if items:
-                report.write(f"------------------------------------------------\n[ {category} FILES ]\n")
-                for item in items:
-                    report.write(item + "\n")
+        for section, files in results.items():
+            if files:
+                report.write(f"[ {section.upper()} FILES ]\n")
+                for f in files:
+                    report.write(f"{f}\n")
                 report.write("\n")
+
+        if results["placeholders"]:
+            report.write("------------------------------------------------\n")
+            report.write("[ PLACEHOLDER WARNINGS ]\n")
+            for warn in results["placeholders"]:
+                report.write(f"{warn}\n")
