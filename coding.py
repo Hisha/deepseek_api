@@ -42,6 +42,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
 
+    # ✅ File Generation Phase
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
         abs_path = os.path.join(project_folder, path)
@@ -64,13 +65,7 @@ Rules:
 
         progress = int((idx / total_files) * 100)
         current_step = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(
-            job_id,
-            "processing",
-            message="Working...",
-            progress=progress,
-            current_step=current_step
-        )
+        update_job_status(job_id, "processing", current_step, progress)
         logging.info(f"[Job {job_id}] {current_step}")
 
         cmd = [
@@ -101,20 +96,25 @@ Rules:
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
+    # ✅ Log after all files are generated
+    logging.info(f"[Job {job_id}] ✅ Finished generating all {total_files} files.")
+
     # ✅ Phase 2: Validation
-    update_job_status(job_id, "processing", message="Validating generated project...", progress=100, current_step="Running validation...")
+    logging.info(f"[Job {job_id}] ➡ Starting validation phase...")
+    update_job_status(job_id, "processing", "Validating generated project...")
     validation_results = validate_project(project_folder)
     report_path = write_validation_report(project_folder, job_id, validation_results)
 
-    # ✅ Phase 3: Analyze & Repair if needed
+    # ✅ Phase 3: Analyze & Repair
+    logging.info(f"[Job {job_id}] ➡ Starting analysis and repair (if needed)...")
     failed_files = analyze_validation_results(validation_results)
     if failed_files:
-        update_job_status(job_id, "processing", message="Repairing files...", current_step=f"{len(failed_files)} files need fixes")
+        update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...")
         repair_project(
             job_id,
             project_folder,
             failed_files,
-            original_prompt,
+            original_prompt,  # ✅ Pass in-memory prompt
             plan,
             LLAMA_PATH,
             MODEL_CODE_PATH,
@@ -124,6 +124,8 @@ Rules:
             update_job_status
         )
 
+    # ✅ Finalize
+    logging.info(f"[Job {job_id}] ➡ Finalizing job and returning report...")
     update_job_status(job_id, "completed", f"Project generation complete. Report: {report_path}")
     logging.info(f"[Job {job_id}] ✅ Complete.")
     return True
