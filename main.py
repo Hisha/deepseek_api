@@ -62,36 +62,42 @@ def worker():
                 logging.info(f"[Worker] Processing job {job_id} ({job_type})")
 
                 if job_type == "project":
-                    update_job_status(job_id, "processing", "Generating plan...")
-                    success = planning.generate_plan(
-                        job_id, prompt, PROJECTS_DIR, LLAMA_PATH, MODEL_PLAN_PATH, update_job_status
-                    )
-
-                    if success:
-                        update_job_status(job_id, "processing", "Generating code files...")
-                        coding.generate_files(
-                            job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status
+                    try:
+                        update_job_status(job_id, "processing", "Generating plan...")
+                        success = planning.generate_plan(
+                            job_id, prompt, PROJECTS_DIR, LLAMA_PATH, MODEL_PLAN_PATH, update_job_status
                         )
 
-                        # ✅ Create ZIP of the project
-                        project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
-                        zip_path = os.path.join(project_folder, f"job_{job_id}.zip")
-                        shutil.make_archive(zip_path.replace(".zip", ""), 'zip', project_folder)
-                        update_job_status(job_id, "completed", "Project generation complete.")
-                        logging.info(f"[Worker] Job {job_id} zipped at {zip_path}")
-                    else:
-                        update_job_status(job_id, "error", "Plan generation failed.")
+                        if success:
+                            update_job_status(job_id, "processing", "Generating and validating code...")
+                            report_path = coding.generate_files(
+                                job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status
+                            )
+
+                            # ✅ Create ZIP of the project
+                            project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
+                            zip_path = os.path.join(project_folder, f"job_{job_id}.zip")
+                            shutil.make_archive(zip_path.replace(".zip", ""), 'zip', project_folder)
+                            update_job_status(job_id, "completed", f"Project complete. Validation: {report_path}")
+                            logging.info(f"[Worker] Job {job_id} zipped at {zip_path}")
+                        else:
+                            update_job_status(job_id, "error", "Plan generation failed.")
+                    except Exception as e:
+                        logging.error(f"[Worker] Error in project workflow: {e}")
+                        update_job_status(job_id, "error", f"Workflow error: {e}")
 
                 elif job_type == "chat":
-                    quickmode.generate_quick_code(job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_status)
+                    try:
+                        quickmode.generate_quick_code(job_id, prompt, LLAMA_PATH, MODEL_CODE_PATH, update_job_status)
+                    except Exception as e:
+                        logging.error(f"[Worker] Error in quickmode: {e}")
+                        update_job_status(job_id, "error", f"QuickMode error: {e}")
 
             else:
                 time.sleep(3)
         except Exception as e:
-            logging.error(f"Worker error: {e}")
+            logging.error(f"Worker loop error: {e}")
             time.sleep(5)
-
-Thread(target=worker, daemon=True).start()
 
 # ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
