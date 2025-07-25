@@ -7,18 +7,38 @@ from validation import validate_project, write_validation_report
 from analyzer import analyze_validation_results
 from repair import repair_project
 
+# ----------------------------
+# Utility: Clean LLM Output
+# ----------------------------
 def clean_code_output(raw_output):
+    """
+    Cleans raw LLM output for code generation.
+    Removes:
+    - 'assistant' block
+    - '> EOF by user'
+    - Markdown code fences
+    """
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
     raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
     raw_output = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
     raw_output = re.sub(r"```$", "", raw_output, flags=re.MULTILINE)
     return raw_output.strip()
 
+
+# ----------------------------
+# Main Function
+# ----------------------------
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
+    """
+    Generates all files for a given project using the plan.json and prompt.txt.
+    Validates the files, repairs if needed, and writes a validation report.
+    """
+
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
     plan_path = os.path.join(project_folder, "plan.json")
     prompt_path = os.path.join(project_folder, "prompt.txt")
 
+    # ✅ Ensure required files exist
     if not os.path.exists(plan_path) or not os.path.exists(prompt_path):
         update_job_status(job_id, "error", "Missing plan.json or prompt.txt.")
         return False
@@ -69,7 +89,7 @@ Rules:
 
         progress = int((idx / total_files) * 100)
         current_step = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(job_id, "processing", current_step, progress)
+        update_job_status(job_id, "processing", message=current_step, progress=progress, current_step=current_step)
         logging.info(f"[Job {job_id}] {current_step}")
 
         # ✅ Call LLM
@@ -103,11 +123,11 @@ Rules:
 
     # ✅ All files generated
     logging.info(f"[Job {job_id}] ✅ Finished generating all {total_files} files.")
-    update_job_status(job_id, "processing", f"Generated {total_files} files. Starting validation...")
+    update_job_status(job_id, "processing", f"Generated {total_files} files. Starting validation...", 100, "Starting validation")
 
     # ✅ Phase 2: Validation
     logging.info(f"[Job {job_id}] ➡ Starting validation phase...")
-    update_job_status(job_id, "processing", "Validating generated project...")
+    update_job_status(job_id, "processing", "Validating generated project...", 100, "Validating project")
 
     try:
         logging.info(f"[Job {job_id}] Calling validate_project()...")
@@ -131,7 +151,7 @@ Rules:
     logging.info(f"[Job {job_id}] ➡ Starting analysis and repair (if needed)...")
     failed_files = analyze_validation_results(validation_results)
     if failed_files:
-        update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...")
+        update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...", 100, "Repairing files")
         repair_project(
             job_id,
             project_folder,
@@ -148,6 +168,6 @@ Rules:
 
     # ✅ Finalize
     logging.info(f"[Job {job_id}] ➡ Finalizing job and returning report...")
-    update_job_status(job_id, "completed", f"Project generation complete. Report: {report_path}")
+    update_job_status(job_id, "completed", f"Project generation complete. Report: {report_path}", 100, "Completed")
     logging.info(f"[Job {job_id}] ✅ Complete.")
     return True
