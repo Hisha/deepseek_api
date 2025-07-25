@@ -7,13 +7,6 @@ import re
 MAX_REPAIR_ATTEMPTS = 5
 
 def clean_code_output(raw_output):
-    """
-    Cleans raw LLM output for repaired files.
-    Removes:
-    - 'assistant' block
-    - '> EOF by user'
-    - Markdown code fences
-    """
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
     raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
     raw_output = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
@@ -43,6 +36,14 @@ def repair_project(
             file_path = file_info["file"]
             issues = file_info["issues"]
             rel_path = os.path.relpath(file_path, project_folder)
+
+            # ✅ Update UI before repairing
+            update_job_status(
+                job_id,
+                "processing",
+                message=f"Repairing file...",
+                current_step=f"Attempt {attempt}/{MAX_REPAIR_ATTEMPTS}: {rel_path}"
+            )
 
             repair_prompt = f"""
 You are an expert software engineer.
@@ -99,7 +100,6 @@ Rules:
             update_job_status(job_id, "completed", f"Repaired successfully. Report: {report_path}")
             return True
 
-    # If we reach here, max attempts were used
     logging.warning("[Repair] Max repair attempts reached. Some files still have issues.")
     update_job_status(job_id, "completed", f"Partial success. See VALIDATION_REPORT.txt")
     return False
