@@ -64,7 +64,13 @@ Rules:
 
         progress = int((idx / total_files) * 100)
         current_step = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(job_id, "processing", current_step, progress)
+        update_job_status(
+            job_id,
+            "processing",
+            message="Working...",
+            progress=progress,
+            current_step=current_step
+        )
         logging.info(f"[Job {job_id}] {current_step}")
 
         cmd = [
@@ -96,19 +102,19 @@ Rules:
                 out_file.write(f"# ERROR: {e}")
 
     # ✅ Phase 2: Validation
-    update_job_status(job_id, "processing", "Validating generated project...")
+    update_job_status(job_id, "processing", message="Validating generated project...", progress=100, current_step="Running validation...")
     validation_results = validate_project(project_folder)
     report_path = write_validation_report(project_folder, job_id, validation_results)
 
     # ✅ Phase 3: Analyze & Repair if needed
     failed_files = analyze_validation_results(validation_results)
     if failed_files:
-        update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...")
+        update_job_status(job_id, "processing", message="Repairing files...", current_step=f"{len(failed_files)} files need fixes")
         repair_project(
             job_id,
             project_folder,
             failed_files,
-            original_prompt,  # ✅ Pass in-memory prompt
+            original_prompt,
             plan,
             LLAMA_PATH,
             MODEL_CODE_PATH,
