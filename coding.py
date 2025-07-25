@@ -23,10 +23,11 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "Missing plan.json or prompt.txt.")
         return False
 
+    # ✅ Load plan
     with open(plan_path) as f:
         plan = json.load(f)
 
-    # ✅ Load original prompt early and keep in memory
+    # ✅ Load original prompt
     try:
         with open(prompt_path) as f:
             original_prompt = f.read().strip()
@@ -35,12 +36,14 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "Failed to read prompt.txt.")
         return False
 
+    # ✅ Extract files
     files = plan.get("files", [])
     total_files = len(files)
-
     if total_files == 0:
         update_job_status(job_id, "error", "No files found in plan.json.")
         return False
+
+    logging.info(f"[Job {job_id}] Starting file generation for {total_files} files...")
 
     # ✅ File Generation Phase
     for idx, file_info in enumerate(files, start=1):
@@ -48,6 +51,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
+        # ✅ Context Prompt
         context_prompt = f"""
 You are an expert software engineer. Generate the COMPLETE content for:
 {path}
@@ -68,6 +72,7 @@ Rules:
         update_job_status(job_id, "processing", current_step, progress)
         logging.info(f"[Job {job_id}] {current_step}")
 
+        # ✅ Call LLM
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH,
             "-t", "28",
@@ -90,20 +95,37 @@ Rules:
             with open(abs_path, "w") as out_file:
                 out_file.write(cleaned_output)
 
-            logging.info(f"[Job {job_id}] File saved: {path}")
+            logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
-            logging.error(f"[Job {job_id}] Error generating {path}: {e}")
+            logging.error(f"[Job {job_id}] ❌ Error generating {path}: {e}")
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    # ✅ Log after all files are generated
+    # ✅ All files generated
     logging.info(f"[Job {job_id}] ✅ Finished generating all {total_files} files.")
+    update_job_status(job_id, "processing", f"Generated {total_files} files. Starting validation...")
 
     # ✅ Phase 2: Validation
     logging.info(f"[Job {job_id}] ➡ Starting validation phase...")
     update_job_status(job_id, "processing", "Validating generated project...")
-    validation_results = validate_project(project_folder)
-    report_path = write_validation_report(project_folder, job_id, validation_results)
+
+    try:
+        logging.info(f"[Job {job_id}] Calling validate_project()...")
+        validation_results = validate_project(project_folder)
+        logging.info(f"[Job {job_id}] Validation completed successfully.")
+    except Exception as e:
+        logging.error(f"[Job {job_id}] ❌ Error during validate_project(): {e}")
+        update_job_status(job_id, "error", f"Validation failed: {e}")
+        return False
+
+    try:
+        logging.info(f"[Job {job_id}] Writing validation report...")
+        report_path = write_validation_report(project_folder, job_id, validation_results)
+        logging.info(f"[Job {job_id}] Report written: {report_path}")
+    except Exception as e:
+        logging.error(f"[Job {job_id}] ❌ Error writing validation report: {e}")
+        update_job_status(job_id, "error", f"Report writing failed: {e}")
+        return False
 
     # ✅ Phase 3: Analyze & Repair
     logging.info(f"[Job {job_id}] ➡ Starting analysis and repair (if needed)...")
@@ -114,7 +136,7 @@ Rules:
             job_id,
             project_folder,
             failed_files,
-            original_prompt,  # ✅ Pass in-memory prompt
+            original_prompt,
             plan,
             LLAMA_PATH,
             MODEL_CODE_PATH,
