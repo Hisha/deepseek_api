@@ -8,19 +8,11 @@ from analyzer import analyze_validation_results
 from repair import repair_project
 
 def clean_code_output(raw_output):
-    """
-    Cleans raw LLM output for project files.
-    Removes:
-    - 'assistant' block
-    - '> EOF by user'
-    - Markdown code fences
-    """
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
     raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
     raw_output = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
     raw_output = re.sub(r"```$", "", raw_output, flags=re.MULTILINE)
     return raw_output.strip()
-
 
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
@@ -28,17 +20,19 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
     prompt_path = os.path.join(project_folder, "prompt.txt")
 
     if not os.path.exists(plan_path) or not os.path.exists(prompt_path):
-        update_job_status(job_id, "error", "Missing plan.json or original prompt.")
+        update_job_status(job_id, "error", "Missing plan.json or prompt.txt.")
         return False
 
+    with open(plan_path) as f:
+        plan = json.load(f)
+
+    # ✅ Load original prompt early and keep in memory
     try:
-        with open(plan_path) as f:
-            plan = json.load(f)
         with open(prompt_path) as f:
             original_prompt = f.read().strip()
     except Exception as e:
-        logging.error(f"[Job {job_id}] Failed to read plan or prompt: {e}")
-        update_job_status(job_id, "error", "Error reading project plan or prompt.")
+        logging.error(f"[Job {job_id}] Could not read prompt.txt: {e}")
+        update_job_status(job_id, "error", "Failed to read prompt.txt.")
         return False
 
     files = plan.get("files", [])
@@ -70,7 +64,7 @@ Rules:
 
         progress = int((idx / total_files) * 100)
         current_step = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(job_id, "processing", message=current_step, progress=progress, current_step=current_step)
+        update_job_status(job_id, "processing", current_step, progress)
         logging.info(f"[Job {job_id}] {current_step}")
 
         cmd = [
@@ -111,10 +105,19 @@ Rules:
     if failed_files:
         update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...")
         repair_project(
-            job_id, project_folder, failed_files, original_prompt, plan,
-            LLAMA_PATH, MODEL_CODE_PATH,
-            validate_project, analyze_validation_results, write_validation_report,
+            job_id,
+            project_folder,
+            failed_files,
+            original_prompt,  # ✅ Pass in-memory prompt
+            plan,
+            LLAMA_PATH,
+            MODEL_CODE_PATH,
+            validate_project,
+            analyze_validation_results,
+            write_validation_report,
             update_job_status
         )
 
-    return report_path
+    update_job_status(job_id, "completed", f"Project generation complete. Report: {report_path}")
+    logging.info(f"[Job {job_id}] ✅ Complete.")
+    return True
