@@ -6,17 +6,18 @@ import re
 
 def extract_json_block(text):
     """Extract JSON block from raw model output."""
-    # 1. Check for fenced JSON
+    # Look for ```json fenced block first
     fenced_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
     if fenced_match:
         return fenced_match.group(1)
 
-    # 2. Otherwise, extract the first JSON object
+    # Fallback: any JSON object
     brace_match = re.search(r"(\{[\s\S]*\})", text)
     if brace_match:
         return brace_match.group(1)
 
     return None
+
 
 def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, update_job_status):
     project_folder = os.path.join(projects_dir, f"job_{job_id}")
@@ -26,8 +27,10 @@ def generate_plan(job_id, prompt, projects_dir, llama_path, model_plan_path, upd
     with open(os.path.join(project_folder, "prompt.txt"), "w") as f:
         f.write(prompt)
 
+    # ✅ Enhanced prompt for better modularity
     plan_prompt = f"""
-You are a senior software architect. Based on this description: {prompt}
+You are a senior software architect. Based on this description:
+{prompt}
 
 Generate ONLY valid JSON in this format:
 {{
@@ -42,14 +45,24 @@ Generate ONLY valid JSON in this format:
 }}
 
 Rules:
-- Must include at least:
+- Always include:
   - One main entry point file
-  - A dependency file (requirements.txt or similar)
+  - A dependency file (requirements.txt, CMakeLists.txt, or similar)
   - A README.md
-- Split code into logical modules: routes, config, utils, templates, static if relevant.
-- No arbitrary file count limit—add only necessary files for a production-ready implementation.
-- Use exact keys: "path", "description", "prompt".
-- Output ONLY JSON (no markdown, no commentary).
+- Organize code into modular folders:
+  - For **C++ projects**:
+    - Place headers in `include/` folder
+    - Place source files in `src/` folder
+    - Include a `CMakeLists.txt` at the root
+    - Add `include_directories(include)` in CMakeLists.txt
+  - For **Python projects**:
+    - Use `app/` folder for main logic
+    - Place routes, config, and DB modules logically
+- For HTML UI, place templates under `templates/`
+- Add Dockerfile if containerization is required
+- Add SQL schema file if DB is required
+- Avoid placeholders: use real example content
+- Output ONLY JSON (no markdown, no commentary)
 """
 
     cmd = [
@@ -72,7 +85,7 @@ Rules:
     with open(raw_path, "w") as f:
         f.write(raw_output)
 
-    # ✅ Extract only the JSON block
+    # ✅ Extract JSON
     json_block = extract_json_block(raw_output)
     if not json_block:
         logging.error(f"[Project Job {job_id}] No JSON block found in model output.")
