@@ -98,6 +98,8 @@ def worker():
         except Exception as e:
             logging.error(f"Worker loop error: {e}")
             time.sleep(5)
+# Start the background worker
+Thread(target=worker, daemon=True).start()
 
 # ----------------- Routes -----------------
 @app.get("/", response_class=HTMLResponse)
