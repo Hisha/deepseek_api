@@ -26,6 +26,50 @@ def clean_code_output(raw_output):
 
 
 # ----------------------------
+# Utility: Fix C++ Include Paths
+# ----------------------------
+def fix_cpp_includes(project_folder):
+    """
+    Automatically fix incorrect #include paths for C++ projects by scanning header files.
+    """
+    logging.info(f"[FixIncludes] Scanning project for header files...")
+    header_map = {}
+    for root, _, files in os.walk(project_folder):
+        for file in files:
+            if file.endswith(".h"):
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, project_folder).replace("\\", "/")
+                header_map[file] = rel_path
+
+    include_pattern = re.compile(r'#include\s+"([^"]+)"')
+    fixes_applied = 0
+
+    for root, _, files in os.walk(project_folder):
+        for file in files:
+            if file.endswith(".cpp") or file.endswith(".h"):
+                file_path = os.path.join(root, file)
+                with open(file_path, "r") as f:
+                    content = f.read()
+
+                updated_content = content
+                for match in include_pattern.findall(content):
+                    if match in header_map:
+                        correct_path = header_map[match]
+                        updated_content = updated_content.replace(
+                            f'#include "{match}"', f'#include "{correct_path}"'
+                        )
+
+                if updated_content != content:
+                    with open(file_path, "w") as f:
+                        f.write(updated_content)
+                    logging.info(f"[FixIncludes] Updated includes in {file_path}")
+                    fixes_applied += 1
+
+    logging.info(f"[FixIncludes] Total include fixes applied: {fixes_applied}")
+    return fixes_applied
+
+
+# ----------------------------
 # Main Function
 # ----------------------------
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
@@ -128,12 +172,20 @@ Rules:
             with open(abs_path, "w") as out_file:
                 out_file.write(f"# ERROR: {e}")
 
-    # ✅ Post-generation steps
+    # ✅ Post-generation: Fix C++ includes
     logging.info(f"[Job {job_id}] ✅ Finished generating all {total_files} files.")
-    update_job_status(job_id, "processing", f"Generated {total_files} files. Starting validation...", 100, "Starting validation")
+    update_job_status(job_id, "processing", f"Fixing C++ include paths...", 100, "Fixing includes")
+
+    try:
+        fixes = fix_cpp_includes(project_folder)
+        logging.info(f"[Job {job_id}] ✅ Include path fixes applied: {fixes}")
+    except Exception as e:
+        logging.error(f"[Job {job_id}] ❌ Error fixing includes: {e}")
 
     # ✅ Validation
+    update_job_status(job_id, "processing", f"Generated {total_files} files. Starting validation...", 100, "Starting validation")
     logging.info(f"[Job {job_id}] ➡ Starting validation phase...")
+
     try:
         validation_results = validate_project(project_folder)
         logging.info(f"[Job {job_id}] Validation completed successfully.")
@@ -152,7 +204,7 @@ Rules:
         return False
 
     # ✅ Analyze & Repair (includes missing files)
-    failed_files = analyze_validation_results(validation_results, plan, project_folder)
+    failed_files = analyze_validation_results(validation_results)
     if failed_files:
         update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...", 100, "Repairing files")
         repair_project(
