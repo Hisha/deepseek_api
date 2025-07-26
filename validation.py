@@ -6,6 +6,13 @@ from datetime import datetime
 import shutil
 
 # ----------------------------
+# Invalid Packages List
+# ----------------------------
+INVALID_PACKAGES = {
+    "sqlite3", "sys", "os", "json", "re", "logging", "subprocess", "argparse"
+}
+
+# ----------------------------
 # Individual Validators
 # ----------------------------
 def validate_python(file_path):
@@ -34,7 +41,14 @@ def validate_html(file_path):
 def validate_docker(file_path):
     with open(file_path) as f:
         content = f.read()
-    return "[OK]" if "FROM" in content else "[WARN] Missing FROM statement"
+
+    issues = []
+    if "FROM" not in content:
+        issues.append("Missing FROM statement")
+    if "CMD" not in content and "ENTRYPOINT" not in content:
+        issues.append("Missing CMD or ENTRYPOINT")
+
+    return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_sql(file_path):
     try:
@@ -42,6 +56,20 @@ def validate_sql(file_path):
         return "[OK]" if result.returncode == 0 else f"[ERROR] {result.stderr.strip()}"
     except Exception as e:
         return f"[WARN] sqlite3 not installed or failed: {e}"
+
+def validate_requirements(file_path):
+    invalid_lines = []
+    try:
+        with open(file_path) as f:
+            for line in f:
+                pkg = line.strip().split("==")[0]
+                if pkg in INVALID_PACKAGES:
+                    invalid_lines.append(pkg)
+        if invalid_lines:
+            return f"[ERROR] Invalid packages in requirements.txt: {', '.join(invalid_lines)}"
+        return "[OK]"
+    except Exception as e:
+        return f"[ERROR] Failed to validate requirements.txt: {e}"
 
 def scan_placeholders(file_path):
     with open(file_path) as f:
@@ -55,7 +83,7 @@ def scan_placeholders(file_path):
 # ----------------------------
 def validate_project(project_folder):
     """
-    Validate only code-related files. Skip plan.json, prompt.txt, etc.
+    Validate code files and configs. Skip non-relevant files.
     """
     logging.info(f"[Validation] Starting validation in {project_folder}")
 
@@ -65,14 +93,12 @@ def validate_project(project_folder):
 
     for root, _, files in os.walk(project_folder):
         for file in files:
-            # ✅ Skip ignored files
             if file in ignore_files or any(file.endswith(ext) for ext in ignore_extensions):
                 continue
 
             file_path = os.path.join(root, file)
             logging.info(f"[Validation] Checking file: {file_path}")
 
-            # ✅ Validate based on type
             if file.endswith(".py"):
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
@@ -83,11 +109,11 @@ def validate_project(project_folder):
                 results[file_path] = validate_docker(file_path)
             elif file.endswith(".sql"):
                 results[file_path] = validate_sql(file_path)
+            elif file == "requirements.txt":
+                results[file_path] = validate_requirements(file_path)
             else:
-                # ✅ Non-code file that slipped through, mark as skipped
                 results[file_path] = "[SKIPPED] Non-code file"
 
-            # ✅ Check for placeholders
             placeholder = scan_placeholders(file_path)
             if placeholder:
                 results[file_path] += f" | {placeholder}"
