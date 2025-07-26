@@ -5,16 +5,10 @@ import logging
 from datetime import datetime
 import shutil
 
-# ----------------------------
-# Invalid Packages List
-# ----------------------------
 INVALID_PACKAGES = {
     "sqlite3", "sys", "os", "json", "re", "logging", "subprocess", "argparse"
 }
 
-# ----------------------------
-# Individual Validators
-# ----------------------------
 def validate_python(file_path):
     try:
         subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
@@ -27,6 +21,15 @@ def validate_cpp(file_path):
         return "[WARN] g++ not installed"
     try:
         subprocess.check_output(["g++", "-fsyntax-only", file_path], stderr=subprocess.STDOUT)
+        return "[OK]"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] {e.output.decode('utf-8')}"
+
+def validate_go(file_path):
+    if not shutil.which("go"):
+        return "[WARN] Go not installed"
+    try:
+        subprocess.check_output(["go", "build", file_path], stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
         return f"[ERROR] {e.output.decode('utf-8')}"
@@ -47,6 +50,8 @@ def validate_docker(file_path):
         issues.append("Missing FROM statement")
     if "CMD" not in content and "ENTRYPOINT" not in content:
         issues.append("Missing CMD or ENTRYPOINT")
+    if "RUN go build" not in content and "RUN pip install" not in content:
+        issues.append("Missing build step")
 
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
@@ -78,13 +83,7 @@ def scan_placeholders(file_path):
         return "[WARN] Placeholder text found"
     return None
 
-# ----------------------------
-# Main Validation Logic
-# ----------------------------
 def validate_project(project_folder):
-    """
-    Validate code files and configs. Skip non-relevant files.
-    """
     logging.info(f"[Validation] Starting validation in {project_folder}")
 
     results = {}
@@ -103,6 +102,8 @@ def validate_project(project_folder):
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
                 results[file_path] = validate_cpp(file_path)
+            elif file.endswith(".go"):
+                results[file_path] = validate_go(file_path)
             elif file.endswith(".html"):
                 results[file_path] = validate_html(file_path)
             elif file.lower() == "dockerfile":
@@ -121,9 +122,6 @@ def validate_project(project_folder):
     logging.info(f"[Validation] Completed validation for {len(results)} files.")
     return results
 
-# ----------------------------
-# Report Writer
-# ----------------------------
 def write_validation_report(project_folder, job_id, validation_results):
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
     with open(report_path, "w") as report:
