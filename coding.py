@@ -30,8 +30,8 @@ def clean_code_output(raw_output):
 # ----------------------------
 def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job_status):
     """
-    Generates all files for a given project using the plan.json and prompt.txt.
-    Validates the files, repairs if needed, and writes a validation report.
+    Generates all files for a given project using plan.json and prompt.txt.
+    Validates the files, repairs missing/invalid files, and writes a validation report.
     """
 
     project_folder = os.path.join(PROJECTS_DIR, f"job_{job_id}")
@@ -43,17 +43,15 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "Missing plan.json or prompt.txt.")
         return False
 
-    # ✅ Load plan
-    with open(plan_path) as f:
-        plan = json.load(f)
-
-    # ✅ Load original prompt
+    # ✅ Load plan and original prompt
     try:
+        with open(plan_path) as f:
+            plan = json.load(f)
         with open(prompt_path) as f:
             original_prompt = f.read().strip()
     except Exception as e:
-        logging.error(f"[Job {job_id}] Could not read prompt.txt: {e}")
-        update_job_status(job_id, "error", "Failed to read prompt.txt.")
+        logging.error(f"[Job {job_id}] Failed to read plan/prompt: {e}")
+        update_job_status(job_id, "error", "Failed to read plan or prompt.")
         return False
 
     # ✅ Extract files
@@ -76,9 +74,9 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         if path == "requirements.txt":
             extra_rule = "- Do NOT include Python standard libraries (sqlite3, os, sys, etc.) in this file."
         if path.lower() == "dockerfile":
-            extra_rule += "\n- Ensure Dockerfile uses proper Go/Python base image and includes CMD."
+            extra_rule += "\n- Ensure Dockerfile uses proper Go/C++/Python base image and includes build + CMD."
 
-        # ✅ Context Prompt
+        # ✅ Context Prompt for LLM
         context_prompt = f"""
 You are an expert software engineer. Generate the COMPLETE content for:
 {path}
@@ -101,7 +99,7 @@ Rules:
         update_job_status(job_id, "processing", message=current_step, progress=progress, current_step=current_step)
         logging.info(f"[Job {job_id}] {current_step}")
 
-        # ✅ Call LLM
+        # ✅ Call LLM for code generation
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH,
             "-t", "28",
@@ -153,8 +151,8 @@ Rules:
         update_job_status(job_id, "error", f"Report writing failed: {e}")
         return False
 
-    # ✅ Analyze & Repair
-    failed_files = analyze_validation_results(validation_results)
+    # ✅ Analyze & Repair (includes missing files)
+    failed_files = analyze_validation_results(validation_results, plan, project_folder)
     if failed_files:
         update_job_status(job_id, "processing", f"Repairing {len(failed_files)} files...", 100, "Repairing files")
         repair_project(
@@ -171,6 +169,7 @@ Rules:
             update_job_status
         )
 
+    # ✅ Finalize
     update_job_status(job_id, "completed", f"Project generation complete. Report: {report_path}", 100, "Completed")
     logging.info(f"[Job {job_id}] ✅ Complete.")
     return True
