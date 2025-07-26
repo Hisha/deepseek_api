@@ -9,6 +9,9 @@ INVALID_PACKAGES = {
     "sqlite3", "sys", "os", "json", "re", "logging", "subprocess", "argparse"
 }
 
+# ----------------------------
+# Validators for different file types
+# ----------------------------
 def validate_python(file_path):
     try:
         subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
@@ -83,6 +86,9 @@ def scan_placeholders(file_path):
         return "[WARN] Placeholder text found"
     return None
 
+# ----------------------------
+# Main Validation Logic
+# ----------------------------
 def validate_project(project_folder):
     logging.info(f"[Validation] Starting validation in {project_folder}")
 
@@ -122,6 +128,9 @@ def validate_project(project_folder):
     logging.info(f"[Validation] Completed validation for {len(results)} files.")
     return results
 
+# ----------------------------
+# Report Writer
+# ----------------------------
 def write_validation_report(project_folder, job_id, validation_results):
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
     with open(report_path, "w") as report:
