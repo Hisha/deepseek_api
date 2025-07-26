@@ -7,19 +7,11 @@ import re
 MAX_REPAIR_ATTEMPTS = 5
 
 def clean_code_output(raw_output):
-    """
-    Cleans raw LLM output for repaired files.
-    Removes:
-    - 'assistant' block
-    - '> EOF by user'
-    - Markdown code fences
-    """
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
     raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
     raw_output = re.sub(r"^```[a-zA-Z]*", "", raw_output.strip(), flags=re.MULTILINE)
     raw_output = re.sub(r"```$", "", raw_output, flags=re.MULTILINE)
     return raw_output.strip()
-
 
 def repair_project(
     job_id,
@@ -34,10 +26,6 @@ def repair_project(
     write_validation_report,
     update_job_status
 ):
-    """
-    Attempt to repair invalid files by regenerating them using context + error info.
-    Shows real-time status updates for each repair attempt.
-    """
     total_failures = len(failed_files)
 
     for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
@@ -48,21 +36,16 @@ def repair_project(
             issues = file_info["issues"]
             rel_path = os.path.relpath(file_path, project_folder)
 
-            # ✅ Calculate progress for repair phase (optional enhancement)
+            extra_rule = ""
+            if "requirements.txt" in rel_path:
+                extra_rule = "- Remove invalid dependencies (sqlite3, os, sys, etc.). Only include external packages."
+
             progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS)
             current_step = f"Repair Attempt {attempt}/{MAX_REPAIR_ATTEMPTS} - File {idx}/{total_failures}: {rel_path}"
 
-            # ✅ Update UI
-            update_job_status(
-                job_id,
-                "processing",
-                message="Repairing invalid files...",
-                progress=progress,
-                current_step=current_step
-            )
+            update_job_status(job_id, "processing", message="Repairing invalid files...", progress=progress, current_step=current_step)
             logging.info(f"[Repair] {current_step}")
 
-            # ✅ Build repair prompt
             repair_prompt = f"""
 You are an expert software engineer.
 Repair the file: {rel_path}
@@ -80,9 +63,9 @@ Rules:
 - Rewrite the entire file content correctly.
 - Fix all validation errors.
 - Do NOT output markdown or commentary, only the code.
+{extra_rule}
 """
 
-            # ✅ Call LLM for repair
             cmd = [
                 LLAMA_PATH, "-m", MODEL_CODE_PATH,
                 "-t", "28",
@@ -109,7 +92,6 @@ Rules:
             except Exception as e:
                 logging.error(f"[Repair] ❌ Error fixing {rel_path}: {e}")
 
-        # ✅ Re-validate after each repair attempt
         logging.info(f"[Repair] ✅ Re-validating after attempt {attempt}...")
         validation_results = validate_project(project_folder)
         report_path = write_validation_report(project_folder, job_id, validation_results)
@@ -120,7 +102,6 @@ Rules:
             update_job_status(job_id, "completed", f"Repaired successfully. Report: {report_path}", 100, "Repair complete")
             return True
 
-    # If we reach here, max attempts were used
     logging.warning("[Repair] ⚠ Max repair attempts reached. Some files still have issues.")
     update_job_status(job_id, "completed", f"Partial success. See VALIDATION_REPORT.txt", 100, "Repair incomplete")
     return False
