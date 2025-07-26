@@ -39,6 +39,8 @@ def repair_project(
             extra_rule = ""
             if "requirements.txt" in rel_path:
                 extra_rule = "- Remove invalid dependencies (sqlite3, os, sys, etc.). Only include external packages."
+            if rel_path.lower() == "dockerfile":
+                extra_rule += "\n- Ensure Dockerfile has FROM, CMD, and build steps."
 
             progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS)
             current_step = f"Repair Attempt {attempt}/{MAX_REPAIR_ATTEMPTS} - File {idx}/{total_failures}: {rel_path}"
