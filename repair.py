@@ -37,47 +37,47 @@ def repair_project(
             rel_path = os.path.relpath(file_path, project_folder)
             is_missing = "[MISSING]" in issues
 
-            # ✅ Extra rules based on file type
             extra_rule = ""
             if "requirements.txt" in rel_path:
                 extra_rule = "- Remove invalid dependencies (sqlite3, os, sys, etc.). Only include external packages."
             if rel_path.lower() == "dockerfile":
-                extra_rule += "\n- Ensure Dockerfile has FROM, CMD, and build steps."
+                extra_rule += "\n- Ensure Dockerfile has FROM, build steps, and CMD."
+            if rel_path.lower() == "cmakelists.txt":
+                extra_rule += "\n- Ensure include_directories and find_package(SQLite3 REQUIRED) are present."
+            if "SQLite" in issues:
+                extra_rule += "\n- Ensure C++ code integrates SQLite with sqlite3.h and proper linking."
+            if "compression" in original_prompt.lower() or "encryption" in original_prompt.lower():
+                extra_rule += "\n- Implement basic compression and AES encryption utilities."
 
-            # ✅ Status update
             progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS)
             current_step = f"Repair Attempt {attempt}/{MAX_REPAIR_ATTEMPTS} - File {idx}/{total_failures}: {rel_path}"
             update_job_status(job_id, "processing", message="Repairing files...", progress=progress, current_step=current_step)
             logging.info(f"[Repair] {current_step}")
 
-            # ✅ Determine repair prompt
+            file_specific_prompt = f"Fix issues in {rel_path}. Current problems: {issues}"
             if is_missing:
-                logging.info(f"[Repair] Regenerating missing file: {rel_path}")
-                file_specific_prompt = file_info.get("prompt", f"Recreate {rel_path} based on project description.")
-            else:
-                file_specific_prompt = f"Fix issues in {rel_path}. Current problems: {issues}"
+                file_specific_prompt = f"Recreate missing file: {rel_path}."
 
             repair_prompt = f"""
-You are an expert software engineer.
-File to repair/regenerate: {rel_path}
+You are an expert C++/software engineer.
+File: {rel_path}
 
 Project Description:
 {original_prompt}
 
-Full Plan:
+Plan:
 {json.dumps(plan, indent=2)}
 
 Task:
 {file_specific_prompt}
 
 Rules:
-- Provide the COMPLETE file content.
-- Fix all errors and missing logic.
+- Output COMPLETE file content.
+- Fix all logic and validation issues.
 - Do NOT output markdown or commentary, only the code.
 {extra_rule}
 """
 
-            # ✅ Run LLM repair
             cmd = [
                 LLAMA_PATH, "-m", MODEL_CODE_PATH,
                 "-t", "28",
@@ -91,25 +91,21 @@ Rules:
 
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
-                raw_output = result.stdout.strip()
-                cleaned_output = clean_code_output(raw_output)
-
+                cleaned_output = clean_code_output(result.stdout.strip())
                 if not cleaned_output or len(cleaned_output.splitlines()) < 2:
                     cleaned_output = f"# ERROR: LLM returned insufficient content for {rel_path}\n"
 
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 with open(file_path, "w") as f:
                     f.write(cleaned_output)
-
                 logging.info(f"[Repair] ✅ Updated/Created {rel_path}")
             except Exception as e:
                 logging.error(f"[Repair] ❌ Error fixing {rel_path}: {e}")
 
-        # ✅ Re-validate after each repair attempt
         logging.info(f"[Repair] ✅ Re-validating after attempt {attempt}...")
         validation_results = validate_project(project_folder)
         report_path = write_validation_report(project_folder, job_id, validation_results)
-        failed_files = analyze_validation_results(validation_results, plan, project_folder)
+        failed_files = analyze_validation_results(validation_results)
 
         if not failed_files:
             logging.info("[Repair] ✅ All issues resolved!")
