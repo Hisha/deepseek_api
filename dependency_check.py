@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 
 # Critical external dependencies for C++ projects
 CRITICAL_HEADERS = {
@@ -13,7 +12,7 @@ CRITICAL_HEADERS = {
 def scan_missing_dependencies(project_folder):
     """
     Scan all .cpp and .h files for critical headers.
-    Returns a dict of {header: count} for missing includes.
+    Returns dict: {"missing": {...}, "install_command": "..."}
     """
     logging.info("[DependencyCheck] Scanning for critical dependencies...")
     found_headers = {hdr: False for hdr in CRITICAL_HEADERS}
@@ -29,20 +28,18 @@ def scan_missing_dependencies(project_folder):
                             found_headers[header] = True
 
     missing = {hdr: pkg for hdr, pkg in CRITICAL_HEADERS.items() if found_headers[hdr]}
+    install_command = ""
     if missing:
+        install_command = "apt-get update && apt-get install -y " + " ".join(missing.values())
         logging.warning(f"[DependencyCheck] Missing system dependencies: {missing}")
+        logging.warning(f"[DependencyCheck] Suggested install command: {install_command}")
     else:
         logging.info("[DependencyCheck] No critical dependencies detected.")
 
-    return missing  # Example: {"sqlite3.h": "libsqlite3-dev", "SDL2/SDL.h": "libsdl2-dev"}
+    return {"missing": missing, "install_command": install_command}
 
 def log_dependency_fix_instructions(missing):
-    """
-    Log instructions for installing missing dependencies.
-    """
     if missing:
         logging.warning("[DependencyCheck] The following system packages are required:")
         for header, pkg in missing.items():
             logging.warning(f"  - {header}: Install `{pkg}`")
-        logging.warning("Install with: apt-get update && apt-get install -y " +
-                        " ".join(missing.values()))
