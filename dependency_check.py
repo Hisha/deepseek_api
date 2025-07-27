@@ -9,13 +9,22 @@ CRITICAL_HEADERS = {
     "SDL2/SDL.h": "libsdl2-dev"
 }
 
+# For other languages
+LANG_DEPENDENCIES = {
+    "python": ["python3", "pip"],
+    "go": ["golang"],
+    "java": ["openjdk-17-jdk", "maven"]
+}
+
 def scan_missing_dependencies(project_folder):
     """
     Scan all .cpp and .h files for critical headers.
+    Also note language-related dependencies.
     Returns dict: {"missing": {...}, "install_command": "..."}
     """
     logging.info("[DependencyCheck] Scanning for critical dependencies...")
     found_headers = {hdr: False for hdr in CRITICAL_HEADERS}
+    detected_langs = set()
 
     for root, _, files in os.walk(project_folder):
         for file in files:
@@ -26,8 +35,18 @@ def scan_missing_dependencies(project_folder):
                     for header in CRITICAL_HEADERS:
                         if header in content:
                             found_headers[header] = True
+            elif file.endswith(".py"):
+                detected_langs.add("python")
+            elif file.endswith(".go"):
+                detected_langs.add("go")
+            elif file.endswith(".java"):
+                detected_langs.add("java")
 
     missing = {hdr: pkg for hdr, pkg in CRITICAL_HEADERS.items() if found_headers[hdr]}
+    for lang in detected_langs:
+        for pkg in LANG_DEPENDENCIES.get(lang, []):
+            missing[f"{lang}-runtime"] = pkg
+
     install_command = ""
     if missing:
         install_command = "apt-get update && apt-get install -y " + " ".join(missing.values())
