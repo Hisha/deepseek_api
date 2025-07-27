@@ -64,9 +64,9 @@ Rules:
 - Do NOT include markdown, comments about the task, or explanations.
 """
 
-            progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS)
+            progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS) + (attempt - 1) * 10
             current_step = f"Repair Attempt {attempt}/{MAX_REPAIR_ATTEMPTS} - File {idx}/{total_failures}: {rel_path}"
-            update_job_status(job_id, "processing", message="Repairing files...", progress=progress, current_step=current_step)
+            update_job_status(job_id, "processing", message="Repairing files...", progress=min(progress, 95), current_step=current_step)
             logging.info(f"[Repair] {current_step}")
 
             cmd = [
