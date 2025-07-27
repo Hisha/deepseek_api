@@ -30,40 +30,55 @@ def validate_python(file_path):
     except subprocess.CalledProcessError as e:
         return f"[ERROR] {e.output.decode('utf-8')}"
 
+def validate_python_requirements(project_folder):
+    req_path = os.path.join(project_folder, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            result = subprocess.run(["pip", "check"], capture_output=True, text=True)
+            return "[OK]" if result.returncode == 0 else f"[WARN] {result.stdout.strip()}"
+        except FileNotFoundError:
+            return "[WARN] pip not installed"
+    return None
+
 def validate_cpp(file_path, missing_deps):
-    """
-    Performs syntax validation and collects missing dependencies instead of failing.
-    """
     with open(file_path, "r") as f:
         content = f.read()
 
-    # Detect missing headers and log them for INSTALL.md
     for header, pkg in DEPENDENCY_MAP.items():
         if header in content:
-            header_path = header.split("/")[0]  # base include
-            if not os.path.exists(f"/usr/include/{header_path}"):  # crude check
+            header_path = header.split("/")[0]
+            if not os.path.exists(f"/usr/include/{header_path}"):
                 missing_deps.add((header, pkg))
 
     if not shutil.which("g++"):
         return "[WARN] g++ not installed"
 
     try:
-        # Use g++ but ignore missing includes (disable errors for that)
         cmd = ["g++", "-fsyntax-only", "-Wno-error", "-I./include", file_path]
         subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
-        # Convert "No such file or directory" (missing includes) to WARN
         error_msg = e.output.decode("utf-8")
         if "No such file or directory" in error_msg:
             return "[WARN] Missing includes detected (check INSTALL.md)"
         return f"[ERROR] {error_msg}"
 
-def validate_go(file_path):
+def validate_go(file_path, project_folder):
     if not shutil.which("go"):
         return "[WARN] Go not installed"
+    if not os.path.exists(os.path.join(project_folder, "go.mod")):
+        return "[WARN] Missing go.mod file"
     try:
         subprocess.check_output(["go", "build", file_path], stderr=subprocess.STDOUT)
+        return "[OK]"
+    except subprocess.CalledProcessError as e:
+        return f"[ERROR] {e.output.decode('utf-8')}"
+
+def validate_java(file_path, project_folder):
+    if not shutil.which("javac"):
+        return "[WARN] javac not installed"
+    try:
+        subprocess.check_output(["javac", file_path], stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
         return f"[ERROR] {e.output.decode('utf-8')}"
@@ -83,8 +98,6 @@ def validate_docker(file_path):
         issues.append("Missing FROM statement")
     if "CMD" not in content and "ENTRYPOINT" not in content:
         issues.append("Missing CMD or ENTRYPOINT")
-    if "RUN cmake" not in content and "RUN make" not in content:
-        issues.append("Missing C++ build step")
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_cmake(file_path):
@@ -142,12 +155,15 @@ def validate_project(project_folder):
                 continue
             file_path = os.path.join(root, file)
             logging.info(f"[Validation] Checking file: {file_path}")
+
             if file.endswith(".py"):
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
                 results[file_path] = validate_cpp(file_path, missing_deps)
             elif file.endswith(".go"):
-                results[file_path] = validate_go(file_path)
+                results[file_path] = validate_go(file_path, project_folder)
+            elif file.endswith(".java"):
+                results[file_path] = validate_java(file_path, project_folder)
             elif file.endswith(".html"):
                 results[file_path] = validate_html(file_path)
             elif file.lower() == "dockerfile":
@@ -164,6 +180,11 @@ def validate_project(project_folder):
             placeholder = scan_placeholders(file_path)
             if placeholder:
                 results[file_path] += f" | {placeholder}"
+
+    # ✅ Check Python dependencies if applicable
+    py_dep_check = validate_python_requirements(project_folder)
+    if py_dep_check:
+        results["PythonDependencies"] = py_dep_check
 
     # ✅ Generate INSTALL.md with missing dependencies
     if missing_deps:
