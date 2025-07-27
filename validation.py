@@ -10,7 +10,7 @@ INVALID_PACKAGES = {
 }
 
 # ----------------------------
-# Validators for different file types
+# Validators for file types
 # ----------------------------
 def validate_python(file_path):
     try:
@@ -53,10 +53,39 @@ def validate_docker(file_path):
         issues.append("Missing FROM statement")
     if "CMD" not in content and "ENTRYPOINT" not in content:
         issues.append("Missing CMD or ENTRYPOINT")
-    if "RUN go build" not in content and "RUN pip install" not in content:
-        issues.append("Missing build step")
+    if "RUN cmake" not in content and "RUN make" not in content:
+        issues.append("Missing C++ build step")
 
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
+
+def validate_cmake(file_path):
+    with open(file_path) as f:
+        content = f.read()
+
+    issues = []
+    if "include_directories" not in content:
+        issues.append("Missing include_directories()")
+    if "find_package(SQLite3" not in content:
+        issues.append("Missing find_package(SQLite3 REQUIRED)")
+
+    return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
+
+def validate_sqlite_integration(project_folder):
+    schema_exists = False
+    cpp_uses_sqlite = False
+
+    for root, _, files in os.walk(project_folder):
+        if "schema.sql" in files:
+            schema_exists = True
+        for file in files:
+            if file.endswith(".cpp"):
+                with open(os.path.join(root, file)) as f:
+                    if "sqlite3.h" in f.read():
+                        cpp_uses_sqlite = True
+
+    if schema_exists and not cpp_uses_sqlite:
+        return "[WARN] SQLite schema exists but no C++ code includes sqlite3.h"
+    return None
 
 def validate_sql(file_path):
     try:
@@ -91,8 +120,8 @@ def scan_placeholders(file_path):
 # ----------------------------
 def validate_project(project_folder):
     logging.info(f"[Validation] Starting validation in {project_folder}")
-
     results = {}
+
     ignore_files = {"prompt.txt", "plan.json", "plan_raw.txt", "VALIDATION_REPORT.txt"}
     ignore_extensions = {".zip"}
 
@@ -114,6 +143,8 @@ def validate_project(project_folder):
                 results[file_path] = validate_html(file_path)
             elif file.lower() == "dockerfile":
                 results[file_path] = validate_docker(file_path)
+            elif file.lower() == "cmakelists.txt":
+                results[file_path] = validate_cmake(file_path)
             elif file.endswith(".sql"):
                 results[file_path] = validate_sql(file_path)
             elif file == "requirements.txt":
@@ -124,6 +155,10 @@ def validate_project(project_folder):
             placeholder = scan_placeholders(file_path)
             if placeholder:
                 results[file_path] += f" | {placeholder}"
+
+    sqlite_warn = validate_sqlite_integration(project_folder)
+    if sqlite_warn:
+        results["SQLiteIntegrationCheck"] = sqlite_warn
 
     logging.info(f"[Validation] Completed validation for {len(results)} files.")
     return results
