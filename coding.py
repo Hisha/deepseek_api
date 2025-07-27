@@ -57,6 +57,15 @@ def fix_cpp_includes(project_folder):
 # ----------------------------
 # Auto-Fix Functions for Multi-Language
 # ----------------------------
+def autofix_go(project_folder):
+    """Ensure go.mod exists for Go projects."""
+    go_mod_path = os.path.join(project_folder, "go.mod")
+    if not os.path.exists(go_mod_path):
+        module_name = os.path.basename(project_folder)
+        with open(go_mod_path, "w") as f:
+            f.write(f"module {module_name}\n\ngo 1.21\n")
+        logging.info("[AutoFix] Generated go.mod for Go project.")
+
 def autofix_dockerfile(project_folder, language="cpp"):
     docker_path = os.path.join(project_folder, "Dockerfile")
     base_image = {
@@ -85,6 +94,7 @@ def autofix_dockerfile(project_folder, language="cpp"):
         if "CMD" not in content:
             content += '\nCMD ["python3", "main.py"]\n'
     elif language == "go":
+        autofix_go(project_folder)
         if "RUN go build" not in content:
             content += "\nCOPY . .\nRUN go mod tidy && go build -o app\n"
         if "CMD" not in content:
@@ -112,14 +122,14 @@ def detect_language(files):
             return "go"
         elif f["path"].endswith(".java"):
             return "java"
-    return "cpp"  # default
+    return "cpp"
 
-# Language hints for generation
+# Language-specific hints for LLM
 LANGUAGE_HINTS = {
     "cpp": "Follow C++17 standard with proper header includes.",
-    "python": "Follow PEP8 style, correct indentation, and avoid syntax errors.",
-    "go": "Ensure idiomatic Go code with correct package structure, include 'package main' if needed.",
-    "java": "Ensure correct Java syntax, class and package structure, and include a main method if needed."
+    "python": "Follow PEP8 style and ensure no syntax errors.",
+    "go": "Ensure idiomatic Go code with correct package structure and a main entry point.",
+    "java": "Ensure proper Java syntax with main method and correct package structure."
 }
 
 # ----------------------------
@@ -147,7 +157,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
     language = detect_language(files)
     language_hint = LANGUAGE_HINTS.get(language, "")
     total_files = len(files)
-    logging.info(f"[Job {job_id}] Detected language: {language.upper()}. Starting generation for {total_files} files...")
+    logging.info(f"[Job {job_id}] Detected language: {language.upper()}. Generating {total_files} files...")
 
     # Generate Files
     for idx, file_info in enumerate(files, start=1):
@@ -156,29 +166,29 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
         context_prompt = f"""
-Generate the COMPLETE {language.upper()} file for: {path}
+Generate a COMPLETE {language.upper()} file for: {path}
 Project Description:
 {original_prompt}
+
 Full Plan:
 {json.dumps(plan, indent=2)}
 
-Language Requirements:
+Language Guidelines:
 {language_hint}
 
 Rules:
 - Output ONLY code (no markdown).
-- Ensure all imports and paths are correct.
-- Make the file production-ready and free of syntax errors.
+- Ensure file compiles/runs successfully with all required imports.
 """
         progress = int((idx / total_files) * 70)
-        update_job_status(job_id, "processing", message=f"Generating file {idx}/{total_files}: {path}", progress=progress, current_step=f"File {idx}/{total_files} - {path}")
+        update_job_status(job_id, "processing", message=f"Generating {language.upper()} file {idx}/{total_files}: {path}", progress=progress, current_step=f"File {idx}/{total_files} - {path}")
 
         cmd = [LLAMA_PATH, "-m", MODEL_CODE_PATH, "-t", "28", "--ctx-size", "8192", "--n-predict", "4096", "--temp", "0.25", "--top-p", "0.9", "--repeat-penalty", "1.05", "-p", context_prompt]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
             cleaned_output = clean_code_output(result.stdout.strip())
             with open(abs_path, "w") as f:
-                f.write(cleaned_output or f"# ERROR: No content generated for {path}")
+                f.write(cleaned_output or f"// ERROR: No content generated for {path}")
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
             logging.error(f"[Job {job_id}] ❌ Error generating {path}: {e}")
@@ -188,10 +198,12 @@ Rules:
         fix_cpp_includes(project_folder)
     autofix_dockerfile(project_folder, language)
 
+    # Dependency Check
     missing = scan_missing_dependencies(project_folder)
     if missing.get("missing"):
         log_dependency_fix_instructions(missing["missing"])
 
+    # Validation & Repair
     update_job_status(job_id, "processing", message="Validating project...", progress=85)
     validation_results = validate_project(project_folder)
     report_path = write_validation_report(project_folder, job_id, validation_results)
