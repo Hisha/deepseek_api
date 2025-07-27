@@ -53,7 +53,6 @@ def validate_cpp(file_path, missing_deps):
         subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
-        # Convert "No such file or directory" (missing includes) to WARN
         error_msg = e.output.decode("utf-8")
         if "No such file or directory" in error_msg:
             return "[WARN] Missing includes detected (check INSTALL.md)"
@@ -78,7 +77,6 @@ def validate_html(file_path):
 def validate_docker(file_path):
     with open(file_path) as f:
         content = f.read()
-
     issues = []
     if "FROM" not in content:
         issues.append("Missing FROM statement")
@@ -86,19 +84,16 @@ def validate_docker(file_path):
         issues.append("Missing CMD or ENTRYPOINT")
     if "RUN cmake" not in content and "RUN make" not in content:
         issues.append("Missing C++ build step")
-
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_cmake(file_path):
     with open(file_path) as f:
         content = f.read()
-
     issues = []
     if "include_directories" not in content:
         issues.append("Missing include_directories()")
     if "find_package(SQLite3" not in content:
         issues.append("Missing find_package(SQLite3 REQUIRED)")
-
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_sql(file_path):
@@ -144,10 +139,8 @@ def validate_project(project_folder):
         for file in files:
             if file in ignore_files or any(file.endswith(ext) for ext in ignore_extensions):
                 continue
-
             file_path = os.path.join(root, file)
             logging.info(f"[Validation] Checking file: {file_path}")
-
             if file.endswith(".py"):
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
@@ -171,7 +164,7 @@ def validate_project(project_folder):
             if placeholder:
                 results[file_path] += f" | {placeholder}"
 
-    # ✅ Generate INSTALL.md with missing dependencies
+    # ✅ Generate INSTALL.md
     if missing_deps:
         install_path = os.path.join(project_folder, "INSTALL.md")
         with open(install_path, "w") as f:
@@ -188,10 +181,13 @@ def validate_project(project_folder):
 # ----------------------------
 def write_validation_report(project_folder, job_id, validation_results):
     report_path = os.path.join(project_folder, "VALIDATION_REPORT.txt")
+    install_path = os.path.join(project_folder, "INSTALL.md")
     with open(report_path, "w") as report:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report.write(f"=== VALIDATION REPORT for Job {job_id} ===\nGenerated: {now}\n\n")
         for file_path, result in validation_results.items():
             report.write(f"{file_path}: {result}\n")
+        if os.path.exists(install_path):
+            report.write("\nNOTE: Missing dependencies detected. See INSTALL.md for installation instructions.\n")
     logging.info(f"[Validation] Report generated: {report_path}")
     return report_path
