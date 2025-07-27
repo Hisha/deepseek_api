@@ -12,7 +12,6 @@ INVALID_PACKAGES = {
     "sqlite3", "sys", "os", "json", "re", "logging", "subprocess", "argparse"
 }
 
-# Map of external headers → package hints for INSTALL.md
 DEPENDENCY_MAP = {
     "sqlite3.h": "libsqlite3-dev",
     "SDL2/SDL.h": "libsdl2-dev",
@@ -20,11 +19,8 @@ DEPENDENCY_MAP = {
     "zlib.h": "zlib1g-dev"
 }
 
-# Directories and file types to ignore
 IGNORE_DIRS = {"__pycache__", ".git", "node_modules", "bin", "obj", "target"}
-BINARY_EXTENSIONS = {
-    ".pyc", ".pyo", ".exe", ".dll", ".so", ".o", ".a", ".lib", ".class", ".jar"
-}
+BINARY_EXTENSIONS = {".pyc", ".pyo", ".exe", ".dll", ".so", ".o", ".a", ".lib", ".class", ".jar"}
 IGNORE_FILES = {"prompt.txt", "plan.json", "plan_raw.txt", "VALIDATION_REPORT.txt"}
 IGNORE_EXTENSIONS = {".zip", ".tar", ".gz"}
 
@@ -32,20 +28,17 @@ IGNORE_EXTENSIONS = {".zip", ".tar", ".gz"}
 # Utility Functions
 # ----------------------------
 def is_binary_file(file_path):
-    """Check if a file should be considered binary by extension or content."""
     if any(file_path.endswith(ext) for ext in BINARY_EXTENSIONS):
         return True
     try:
         with open(file_path, "rb") as f:
-            chunk = f.read(1024)
-            if b"\0" in chunk:  # Null byte indicates binary
+            if b"\0" in f.read(1024):
                 return True
-    except Exception:
+    except:
         return True
     return False
 
 def safe_read_text(file_path):
-    """Read file content safely as text or return None if binary/unreadable."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
@@ -78,26 +71,23 @@ def validate_python_requirements(project_folder):
 
 def validate_cpp(file_path, missing_deps):
     content = safe_read_text(file_path)
-    if content is None:
+    if not content:
         return "[SKIPPED] Binary or unreadable file"
-
     for header, pkg in DEPENDENCY_MAP.items():
         if header in content:
             header_path = header.split("/")[0]
             if not os.path.exists(f"/usr/include/{header_path}"):
                 missing_deps.add((header, pkg))
-
     if not shutil.which("g++"):
         return "[WARN] g++ not installed"
-
     try:
         subprocess.check_output(["g++", "-fsyntax-only", "-Wno-error", "-I./include", file_path], stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
-        error_msg = e.output.decode("utf-8")
-        if "No such file or directory" in error_msg:
+        err = e.output.decode("utf-8")
+        if "No such file or directory" in err:
             return "[WARN] Missing includes detected (check INSTALL.md)"
-        return f"[ERROR] {error_msg}"
+        return f"[ERROR] {err}"
 
 def validate_go(file_path, project_folder):
     if not shutil.which("go"):
@@ -160,22 +150,15 @@ def validate_requirements(file_path):
     content = safe_read_text(file_path)
     if not content:
         return "[SKIPPED] Binary or unreadable file"
-    try:
-        for line in content.splitlines():
-            pkg = line.strip().split("==")[0]
-            if pkg in INVALID_PACKAGES:
-                invalid_lines.append(pkg)
-        if invalid_lines:
-            return f"[ERROR] Invalid packages in requirements.txt: {', '.join(invalid_lines)}"
-        return "[OK]"
-    except Exception as e:
-        return f"[ERROR] Failed to validate requirements.txt: {e}"
+    for line in content.splitlines():
+        pkg = line.strip().split("==")[0]
+        if pkg in INVALID_PACKAGES:
+            invalid_lines.append(pkg)
+    return "[OK]" if not invalid_lines else f"[ERROR] Invalid packages: {', '.join(invalid_lines)}"
 
 def scan_placeholders(file_path):
     content = safe_read_text(file_path)
-    if not content:
-        return None
-    if re.search(r"\b(TODO|FIXME|PLACEHOLDER)\b", content, re.IGNORECASE):
+    if content and re.search(r"\b(TODO|FIXME|PLACEHOLDER)\b", content, re.IGNORECASE):
         return "[WARN] Placeholder text found"
     return None
 
@@ -186,6 +169,7 @@ def validate_project(project_folder):
     logging.info(f"[Validation] Starting validation in {project_folder}")
     results = {}
     missing_deps = set()
+    detected_languages = set()
 
     for root, dirs, files in os.walk(project_folder):
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
@@ -197,15 +181,17 @@ def validate_project(project_folder):
                 results[file_path] = "[SKIPPED] Binary file"
                 continue
 
-            logging.info(f"[Validation] Checking file: {file_path}")
-
             if file.endswith(".py"):
+                detected_languages.add("Python")
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
+                detected_languages.add("C++")
                 results[file_path] = validate_cpp(file_path, missing_deps)
             elif file.endswith(".go"):
+                detected_languages.add("Go")
                 results[file_path] = validate_go(file_path, project_folder)
             elif file.endswith(".java"):
+                detected_languages.add("Java")
                 results[file_path] = validate_java(file_path, project_folder)
             elif file.endswith(".html"):
                 results[file_path] = validate_html(file_path)
@@ -224,20 +210,19 @@ def validate_project(project_folder):
             if placeholder:
                 results[file_path] += f" | {placeholder}"
 
-    # ✅ Check Python dependencies if applicable
     py_dep_check = validate_python_requirements(project_folder)
     if py_dep_check:
         results["PythonDependencies"] = py_dep_check
 
-    # ✅ Generate INSTALL.md with missing dependencies
     if missing_deps:
         install_path = os.path.join(project_folder, "INSTALL.md")
         with open(install_path, "w") as f:
-            f.write("# Project Dependencies\n\nInstall the following packages before building:\n\n")
+            f.write("# Project Dependencies\n\nInstall these packages before building:\n\n")
             for header, pkg in sorted(missing_deps):
                 f.write(f"- `{header}` → Install `{pkg}`\n")
         logging.info(f"[Validation] INSTALL.md generated with {len(missing_deps)} dependencies.")
 
+    results["_LANGUAGE_SUMMARY"] = ", ".join(sorted(detected_languages)) or "Unknown"
     logging.info(f"[Validation] Completed validation for {len(results)} files.")
     return results
 
@@ -250,7 +235,11 @@ def write_validation_report(project_folder, job_id, validation_results):
     with open(report_path, "w") as report:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report.write(f"=== VALIDATION REPORT for Job {job_id} ===\nGenerated: {now}\n\n")
+        if "_LANGUAGE_SUMMARY" in validation_results:
+            report.write(f"Detected Languages: {validation_results['_LANGUAGE_SUMMARY']}\n\n")
         for file_path, result in validation_results.items():
+            if file_path.startswith("_"):  # Skip meta keys
+                continue
             report.write(f"{file_path}: {result}\n")
         if os.path.exists(install_path):
             report.write("\nNOTE: Missing dependencies detected. See INSTALL.md for installation instructions.\n")
