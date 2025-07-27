@@ -152,7 +152,13 @@ Rules:
 - Ensure all imports and paths are correct.
 """
         progress = int((idx / total_files) * 70)  # Reserve 30% for validation & repair
-        update_job_status(job_id, "processing", message=f"Generating file {idx}/{total_files}: {path}", progress=progress, current_step=f"File {idx}/{total_files}")
+        update_job_status(
+            job_id,
+            "processing",
+            message=f"Generating file {idx}/{total_files}: {path}",  # Detailed info
+            progress=progress,
+            current_step=f"File {idx}/{total_files} - {path}"       # Shows in UI header
+        )
 
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH, "-t", "28",
