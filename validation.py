@@ -53,6 +53,7 @@ def validate_cpp(file_path, missing_deps):
         subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
+        # Convert "No such file or directory" (missing includes) to WARN
         error_msg = e.output.decode("utf-8")
         if "No such file or directory" in error_msg:
             return "[WARN] Missing includes detected (check INSTALL.md)"
@@ -164,7 +165,7 @@ def validate_project(project_folder):
             if placeholder:
                 results[file_path] += f" | {placeholder}"
 
-    # ✅ Generate INSTALL.md
+    # ✅ Generate INSTALL.md with missing dependencies
     if missing_deps:
         install_path = os.path.join(project_folder, "INSTALL.md")
         with open(install_path, "w") as f:
