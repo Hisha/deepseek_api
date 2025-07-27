@@ -13,6 +13,26 @@ DEPENDENCY_ERRORS = [
     "[WARN] Missing dependency", "Missing includes detected"
 ]
 
+# Language detection based on file extension
+def detect_language(file_path):
+    if file_path.endswith(".cpp") or file_path.endswith(".h"):
+        return "C++"
+    elif file_path.endswith(".py"):
+        return "Python"
+    elif file_path.endswith(".go"):
+        return "Go"
+    elif file_path.endswith(".java"):
+        return "Java"
+    return "Unknown"
+
+# Context-specific language instructions
+LANGUAGE_HINTS = {
+    "C++": "Follow standard C++17 syntax with proper header includes.",
+    "Python": "Ensure PEP8 compliance, valid indentation, and no syntax errors.",
+    "Go": "Follow idiomatic Go, include 'package main' if applicable, and ensure gofmt formatting.",
+    "Java": "Ensure correct class structure, package declarations if needed, and standard Java syntax."
+}
+
 def clean_code_output(raw_output):
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
     raw_output = re.sub(r'>\s*EOF.*$', '', raw_output, flags=re.MULTILINE)
@@ -44,9 +64,14 @@ def repair_project(job_id, project_folder, failed_files, original_prompt, plan,
                 logging.warning(f"[Repair] Skipping {rel_path} (Dependency issue: requires external library)")
                 continue
 
+            # Detect language and set hints
+            language = detect_language(file_path)
+            language_hint = LANGUAGE_HINTS.get(language, "Ensure the file is syntactically correct and complete.")
+
+            # Build repair prompt dynamically
             file_specific_prompt = f"Fix issues in {rel_path}. Problems: {issues}"
             repair_prompt = f"""
-You are an expert C++ software engineer.
+You are an expert {language} software engineer.
 File: {rel_path}
 
 Project Description:
@@ -58,23 +83,28 @@ Plan:
 Task:
 {file_specific_prompt}
 
+Language Requirements:
+{language_hint}
+
 Rules:
 - Output the COMPLETE corrected file content.
-- Fix logic and compilation errors.
-- Do NOT include markdown, comments about the task, or explanations.
+- Do NOT include markdown, explanations, or comments about the fix.
+- Ensure the code is ready to compile or run.
 """
 
+            # UI update
             progress = int(((idx / total_failures) * 100) / MAX_REPAIR_ATTEMPTS) + (attempt - 1) * 10
             current_step = f"Repair Attempt {attempt}/{MAX_REPAIR_ATTEMPTS} - File {idx}/{total_failures}: {rel_path}"
             update_job_status(
                 job_id,
                 "processing",
-                message=f"Repairing file {idx}/{total_failures}: {rel_path}",  # Detailed info
+                message=f"Repairing {language} file {idx}/{total_failures}: {rel_path}",
                 progress=min(progress, 95),
                 current_step=current_step
             )
             logging.info(f"[Repair] {current_step}")
 
+            # Call LLM for repair
             cmd = [
                 LLAMA_PATH, "-m", MODEL_CODE_PATH, "-t", "28",
                 "--ctx-size", "8192", "--n-predict", "4096",
@@ -84,15 +114,20 @@ Rules:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
                 cleaned_output = clean_code_output(result.stdout.strip())
+
+                # If the LLM returned empty or too short output, insert error placeholder
                 if not cleaned_output or len(cleaned_output.splitlines()) < 2:
                     cleaned_output = f"// ERROR: LLM returned insufficient repair content for {rel_path}\n"
+
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 with open(file_path, "w") as f:
                     f.write(cleaned_output)
+
                 logging.info(f"[Repair] ✅ Updated {rel_path}")
             except Exception as e:
                 logging.error(f"[Repair] ❌ Error repairing {rel_path}: {e}")
 
+        # Re-validate after each attempt
         logging.info(f"[Repair] ✅ Re-validating after attempt {attempt}...")
         validation_results = validate_project(project_folder)
         report_path = write_validation_report(project_folder, job_id, validation_results)
