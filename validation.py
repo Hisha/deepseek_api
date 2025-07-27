@@ -24,6 +24,7 @@ DEPENDENCY_MAP = {
 # Validators
 # ----------------------------
 def validate_python(file_path):
+    """Validate Python syntax."""
     try:
         subprocess.check_output(["python3", "-m", "py_compile", file_path], stderr=subprocess.STDOUT)
         return "[OK]"
@@ -31,6 +32,7 @@ def validate_python(file_path):
         return f"[ERROR] {e.output.decode('utf-8')}"
 
 def validate_python_requirements(project_folder):
+    """Check Python dependency installation issues."""
     req_path = os.path.join(project_folder, "requirements.txt")
     if os.path.exists(req_path):
         try:
@@ -41,9 +43,11 @@ def validate_python_requirements(project_folder):
     return None
 
 def validate_cpp(file_path, missing_deps):
+    """Validate C++ syntax and detect missing system headers."""
     with open(file_path, "r") as f:
         content = f.read()
 
+    # Detect missing dependencies for INSTALL.md
     for header, pkg in DEPENDENCY_MAP.items():
         if header in content:
             header_path = header.split("/")[0]
@@ -64,6 +68,7 @@ def validate_cpp(file_path, missing_deps):
         return f"[ERROR] {error_msg}"
 
 def validate_go(file_path, project_folder):
+    """Validate Go code by building the file (requires go.mod)."""
     if not shutil.which("go"):
         return "[WARN] Go not installed"
     if not os.path.exists(os.path.join(project_folder, "go.mod")):
@@ -75,6 +80,7 @@ def validate_go(file_path, project_folder):
         return f"[ERROR] {e.output.decode('utf-8')}"
 
 def validate_java(file_path, project_folder):
+    """Validate Java code by compiling the file."""
     if not shutil.which("javac"):
         return "[WARN] javac not installed"
     try:
@@ -84,6 +90,7 @@ def validate_java(file_path, project_folder):
         return f"[ERROR] {e.output.decode('utf-8')}"
 
 def validate_html(file_path):
+    """Validate HTML using tidy (if installed)."""
     try:
         result = subprocess.run(["tidy", "-q", "-e", file_path], capture_output=True, text=True)
         return "[OK]" if result.returncode == 0 else f"[WARN] {result.stderr.strip()}"
@@ -91,6 +98,7 @@ def validate_html(file_path):
         return "[WARN] tidy not installed"
 
 def validate_docker(file_path):
+    """Basic Dockerfile sanity check."""
     with open(file_path) as f:
         content = f.read()
     issues = []
@@ -101,6 +109,7 @@ def validate_docker(file_path):
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_cmake(file_path):
+    """Validate CMakeLists.txt structure."""
     with open(file_path) as f:
         content = f.read()
     issues = []
@@ -111,6 +120,7 @@ def validate_cmake(file_path):
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
 def validate_sql(file_path):
+    """Validate SQL syntax using sqlite3."""
     try:
         result = subprocess.run(["sqlite3", ":memory:", f".read {file_path}"], capture_output=True, text=True)
         return "[OK]" if result.returncode == 0 else f"[ERROR] {result.stderr.strip()}"
@@ -118,6 +128,7 @@ def validate_sql(file_path):
         return f"[WARN] sqlite3 not installed or failed: {e}"
 
 def validate_requirements(file_path):
+    """Ensure requirements.txt does not include invalid packages."""
     invalid_lines = []
     try:
         with open(file_path) as f:
@@ -132,6 +143,7 @@ def validate_requirements(file_path):
         return f"[ERROR] Failed to validate requirements.txt: {e}"
 
 def scan_placeholders(file_path):
+    """Warn if TODO/FIXME placeholders exist in the file."""
     with open(file_path) as f:
         content = f.read()
     if re.search(r"\b(TODO|FIXME|PLACEHOLDER)\b", content, re.IGNORECASE):
@@ -181,12 +193,12 @@ def validate_project(project_folder):
             if placeholder:
                 results[file_path] += f" | {placeholder}"
 
-    # ✅ Check Python dependencies if applicable
+    # ✅ Check Python dependency consistency if applicable
     py_dep_check = validate_python_requirements(project_folder)
     if py_dep_check:
         results["PythonDependencies"] = py_dep_check
 
-    # ✅ Generate INSTALL.md with missing dependencies
+    # ✅ Generate INSTALL.md for missing system dependencies
     if missing_deps:
         install_path = os.path.join(project_folder, "INSTALL.md")
         with open(install_path, "w") as f:
