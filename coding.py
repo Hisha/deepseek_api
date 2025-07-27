@@ -6,9 +6,10 @@ import re
 from validation import validate_project, write_validation_report
 from analyzer import analyze_validation_results
 from repair import repair_project
+from dependency_check import scan_missing_dependencies, log_dependency_fix_instructions
 
 # ----------------------------
-# Utility: Clean LLM Output
+# Clean LLM Output
 # ----------------------------
 def clean_code_output(raw_output):
     raw_output = re.sub(r'^.*assistant\s*', '', raw_output, flags=re.DOTALL)
@@ -18,10 +19,10 @@ def clean_code_output(raw_output):
     return raw_output.strip()
 
 # ----------------------------
-# Utility: Fix C++ Includes
+# Fix Includes
 # ----------------------------
 def fix_cpp_includes(project_folder):
-    logging.info(f"[FixIncludes] Scanning project for header files...")
+    logging.info(f"[FixIncludes] Scanning for header files...")
     header_map = {}
     for root, _, files in os.walk(project_folder):
         for file in files:
@@ -58,7 +59,7 @@ def fix_cpp_includes(project_folder):
     return fixes_applied
 
 # ----------------------------
-# Auto-Fix for CMake and Docker
+# Auto-Fix Functions
 # ----------------------------
 def autofix_cmake(project_folder):
     cmake_path = os.path.join(project_folder, "CMakeLists.txt")
@@ -69,9 +70,11 @@ def autofix_cmake(project_folder):
         if "include_directories" not in content:
             content += "\ninclude_directories(include)\n"
             fixes = True
-        if "find_package(SQLite3" not in content:
-            content += "\nfind_package(SQLite3 REQUIRED)\n"
-            fixes = True
+        # Add common dependencies
+        for pkg in ["SQLite3", "ZLIB", "Boost", "SDL2"]:
+            if f"find_package({pkg}" not in content:
+                content += f"\nfind_package({pkg} REQUIRED)\n"
+                fixes = True
         if fixes:
             with open(cmake_path, "w") as f:
                 f.write(content)
@@ -82,20 +85,18 @@ def autofix_dockerfile(project_folder):
     if os.path.exists(docker_path):
         with open(docker_path, "r") as f:
             content = f.read()
+        if "RUN apt-get" not in content:
+            content += "\nRUN apt-get update && apt-get install -y libsqlite3-dev zlib1g-dev libboost-all-dev libsdl2-dev\n"
         if "RUN cmake" not in content:
             content += "\nRUN cmake . && make\n"
         if "CMD" not in content:
             content += '\nCMD ["./main"]\n'
         with open(docker_path, "w") as f:
             f.write(content)
-        logging.info("[AutoFix] Updated Dockerfile with missing build/CMD.")
+        logging.info("[AutoFix] Updated Dockerfile with dependencies and build steps.")
 
 def autofix_sqlite_includes(project_folder):
-    schema_exists = False
-    for root, _, files in os.walk(project_folder):
-        if "schema.sql" in files:
-            schema_exists = True
-            break
+    schema_exists = any("schema.sql" in files for _, _, files in os.walk(project_folder))
     if schema_exists:
         for root, _, files in os.walk(project_folder):
             for file in files:
@@ -121,98 +122,66 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "Missing plan.json or prompt.txt.")
         return False
 
-    try:
-        with open(plan_path) as f:
-            plan = json.load(f)
-        with open(prompt_path) as f:
-            original_prompt = f.read().strip()
-    except Exception as e:
-        logging.error(f"[Job {job_id}] Failed to read plan/prompt: {e}")
-        update_job_status(job_id, "error", "Failed to read plan or prompt.")
-        return False
+    with open(plan_path) as f:
+        plan = json.load(f)
+    with open(prompt_path) as f:
+        original_prompt = f.read().strip()
 
     files = plan.get("files", [])
-    total_files = len(files)
-    if total_files == 0:
-        update_job_status(job_id, "error", "No files found in plan.json.")
+    if not files:
+        update_job_status(job_id, "error", "No files in plan.json.")
         return False
 
-    logging.info(f"[Job {job_id}] Starting file generation for {total_files} files...")
-
+    # Generate Files
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
         abs_path = os.path.join(project_folder, path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-        extra_rule = ""
-        if path == "requirements.txt":
-            extra_rule = "- Do NOT include Python standard libraries (sqlite3, os, sys, etc.)."
-        if path.lower() == "dockerfile":
-            extra_rule += "\n- Ensure Dockerfile uses proper base image and includes build steps."
-
         context_prompt = f"""
-You are an expert software engineer. Generate COMPLETE file for:
-{path}
-
+Generate the COMPLETE file for: {path}
 Project Description:
 {original_prompt}
-
-Full Project Plan:
+Full Plan:
 {json.dumps(plan, indent=2)}
-
 Rules:
 - Output ONLY code (no markdown).
-- Ensure imports and references match other files.
-{extra_rule}
+- Ensure all imports and paths are correct.
 """
-
-        progress = int((idx / total_files) * 100)
-        current_step = f"Generating file {idx}/{total_files}: {path}"
-        update_job_status(job_id, "processing", message=current_step, progress=progress, current_step=current_step)
-
         cmd = [
-            LLAMA_PATH, "-m", MODEL_CODE_PATH,
-            "-t", "28",
-            "--ctx-size", "8192",
-            "--n-predict", "4096",
-            "--temp", "0.25",
-            "--top-p", "0.9",
-            "--repeat-penalty", "1.05",
+            LLAMA_PATH, "-m", MODEL_CODE_PATH, "-t", "28",
+            "--ctx-size", "8192", "--n-predict", "4096",
+            "--temp", "0.25", "--top-p", "0.9", "--repeat-penalty", "1.05",
             "-p", context_prompt
         ]
-
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
             cleaned_output = clean_code_output(result.stdout.strip())
-            if not cleaned_output or len(cleaned_output.splitlines()) < 2:
-                cleaned_output = f"# ERROR: LLM returned insufficient content for {path}\n"
-            with open(abs_path, "w") as out_file:
-                out_file.write(cleaned_output)
+            with open(abs_path, "w") as f:
+                f.write(cleaned_output or f"# ERROR: No content generated for {path}")
             logging.info(f"[Job {job_id}] ✅ File saved: {path}")
         except Exception as e:
             logging.error(f"[Job {job_id}] ❌ Error generating {path}: {e}")
-            with open(abs_path, "w") as out_file:
-                out_file.write(f"# ERROR: {e}")
 
-    logging.info(f"[Job {job_id}] ✅ Finished generating all {total_files} files.")
-
-    # ✅ Post-generation fixes
+    # Post-gen Auto Fixes
     fix_cpp_includes(project_folder)
     autofix_cmake(project_folder)
     autofix_dockerfile(project_folder)
     autofix_sqlite_includes(project_folder)
 
-    # ✅ Validation
+    # Dependency Check
+    missing = scan_missing_dependencies(project_folder)
+    if missing:
+        log_dependency_fix_instructions(missing)
+
+    # Validation & Repair
     validation_results = validate_project(project_folder)
     report_path = write_validation_report(project_folder, job_id, validation_results)
-
     failed_files = analyze_validation_results(validation_results)
     if failed_files:
-        repair_project(
-            job_id, project_folder, failed_files, original_prompt, plan,
-            LLAMA_PATH, MODEL_CODE_PATH, validate_project, analyze_validation_results,
-            write_validation_report, update_job_status
-        )
+        repair_project(job_id, project_folder, failed_files, original_prompt, plan,
+                       LLAMA_PATH, MODEL_CODE_PATH, validate_project, analyze_validation_results,
+                       write_validation_report, update_job_status)
 
     update_job_status(job_id, "completed", f"Project complete. Report: {report_path}", 100, "Completed")
     return True
