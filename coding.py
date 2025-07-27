@@ -132,6 +132,9 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         update_job_status(job_id, "error", "No files in plan.json.")
         return False
 
+    total_files = len(files)
+    logging.info(f"[Job {job_id}] Starting file generation for {total_files} files...")
+
     # Generate Files
     for idx, file_info in enumerate(files, start=1):
         path = file_info.get("path")
@@ -148,6 +151,9 @@ Rules:
 - Output ONLY code (no markdown).
 - Ensure all imports and paths are correct.
 """
+        progress = int((idx / total_files) * 70)  # Reserve 30% for validation & repair
+        update_job_status(job_id, "processing", message=f"Generating file {idx}/{total_files}: {path}", progress=progress, current_step=f"File {idx}/{total_files}")
+
         cmd = [
             LLAMA_PATH, "-m", MODEL_CODE_PATH, "-t", "28",
             "--ctx-size", "8192", "--n-predict", "4096",
@@ -164,6 +170,7 @@ Rules:
             logging.error(f"[Job {job_id}] ❌ Error generating {path}: {e}")
 
     # Post-gen Auto Fixes
+    update_job_status(job_id, "processing", message="Applying auto-fixes...", progress=80)
     fix_cpp_includes(project_folder)
     autofix_cmake(project_folder)
     autofix_dockerfile(project_folder)
@@ -175,10 +182,13 @@ Rules:
         log_dependency_fix_instructions(missing)
 
     # Validation & Repair
+    update_job_status(job_id, "processing", message="Validating project...", progress=85)
     validation_results = validate_project(project_folder)
     report_path = write_validation_report(project_folder, job_id, validation_results)
     failed_files = analyze_validation_results(validation_results)
+
     if failed_files:
+        update_job_status(job_id, "processing", message="Repairing files...", progress=90)
         repair_project(job_id, project_folder, failed_files, original_prompt, plan,
                        LLAMA_PATH, MODEL_CODE_PATH, validate_project, analyze_validation_results,
                        write_validation_report, update_job_status)
