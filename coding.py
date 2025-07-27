@@ -114,6 +114,14 @@ def detect_language(files):
             return "java"
     return "cpp"  # default
 
+# Language hints for generation
+LANGUAGE_HINTS = {
+    "cpp": "Follow C++17 standard with proper header includes.",
+    "python": "Follow PEP8 style, correct indentation, and avoid syntax errors.",
+    "go": "Ensure idiomatic Go code with correct package structure, include 'package main' if needed.",
+    "java": "Ensure correct Java syntax, class and package structure, and include a main method if needed."
+}
+
 # ----------------------------
 # Main Function
 # ----------------------------
@@ -137,6 +145,7 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         return False
 
     language = detect_language(files)
+    language_hint = LANGUAGE_HINTS.get(language, "")
     total_files = len(files)
     logging.info(f"[Job {job_id}] Detected language: {language.upper()}. Starting generation for {total_files} files...")
 
@@ -147,14 +156,19 @@ def generate_files(job_id, PROJECTS_DIR, LLAMA_PATH, MODEL_CODE_PATH, update_job
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
         context_prompt = f"""
-Generate the COMPLETE file for: {path}
+Generate the COMPLETE {language.upper()} file for: {path}
 Project Description:
 {original_prompt}
 Full Plan:
 {json.dumps(plan, indent=2)}
+
+Language Requirements:
+{language_hint}
+
 Rules:
 - Output ONLY code (no markdown).
 - Ensure all imports and paths are correct.
+- Make the file production-ready and free of syntax errors.
 """
         progress = int((idx / total_files) * 70)
         update_job_status(job_id, "processing", message=f"Generating file {idx}/{total_files}: {path}", progress=progress, current_step=f"File {idx}/{total_files} - {path}")
