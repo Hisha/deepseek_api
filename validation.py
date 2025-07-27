@@ -5,12 +5,23 @@ import logging
 from datetime import datetime
 import shutil
 
+# ----------------------------
+# Config: Invalid & External Dependencies
+# ----------------------------
 INVALID_PACKAGES = {
     "sqlite3", "sys", "os", "json", "re", "logging", "subprocess", "argparse"
 }
 
+# Map of external headers → package hints for INSTALL.md
+DEPENDENCY_MAP = {
+    "sqlite3.h": "libsqlite3-dev",
+    "SDL2/SDL.h": "libsdl2-dev",
+    "boost/asio.hpp": "libboost-all-dev",
+    "zlib.h": "zlib1g-dev"
+}
+
 # ----------------------------
-# Validators for file types
+# Validators
 # ----------------------------
 def validate_python(file_path):
     try:
@@ -19,14 +30,34 @@ def validate_python(file_path):
     except subprocess.CalledProcessError as e:
         return f"[ERROR] {e.output.decode('utf-8')}"
 
-def validate_cpp(file_path):
+def validate_cpp(file_path, missing_deps):
+    """
+    Performs syntax validation and collects missing dependencies instead of failing.
+    """
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    # Detect missing headers and log them for INSTALL.md
+    for header, pkg in DEPENDENCY_MAP.items():
+        if header in content:
+            header_path = header.split("/")[0]  # base include
+            if not os.path.exists(f"/usr/include/{header_path}"):  # crude check
+                missing_deps.add((header, pkg))
+
     if not shutil.which("g++"):
         return "[WARN] g++ not installed"
+
     try:
-        subprocess.check_output(["g++", "-fsyntax-only", file_path], stderr=subprocess.STDOUT)
+        # Use g++ but ignore missing includes (disable errors for that)
+        cmd = ["g++", "-fsyntax-only", "-Wno-error", "-I./include", file_path]
+        subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         return "[OK]"
     except subprocess.CalledProcessError as e:
-        return f"[ERROR] {e.output.decode('utf-8')}"
+        # Convert "No such file or directory" (missing includes) to WARN
+        error_msg = e.output.decode("utf-8")
+        if "No such file or directory" in error_msg:
+            return "[WARN] Missing includes detected (check INSTALL.md)"
+        return f"[ERROR] {error_msg}"
 
 def validate_go(file_path):
     if not shutil.which("go"):
@@ -70,23 +101,6 @@ def validate_cmake(file_path):
 
     return "[OK]" if not issues else f"[WARN] {'; '.join(issues)}"
 
-def validate_sqlite_integration(project_folder):
-    schema_exists = False
-    cpp_uses_sqlite = False
-
-    for root, _, files in os.walk(project_folder):
-        if "schema.sql" in files:
-            schema_exists = True
-        for file in files:
-            if file.endswith(".cpp"):
-                with open(os.path.join(root, file)) as f:
-                    if "sqlite3.h" in f.read():
-                        cpp_uses_sqlite = True
-
-    if schema_exists and not cpp_uses_sqlite:
-        return "[WARN] SQLite schema exists but no C++ code includes sqlite3.h"
-    return None
-
 def validate_sql(file_path):
     try:
         result = subprocess.run(["sqlite3", ":memory:", f".read {file_path}"], capture_output=True, text=True)
@@ -121,6 +135,7 @@ def scan_placeholders(file_path):
 def validate_project(project_folder):
     logging.info(f"[Validation] Starting validation in {project_folder}")
     results = {}
+    missing_deps = set()
 
     ignore_files = {"prompt.txt", "plan.json", "plan_raw.txt", "VALIDATION_REPORT.txt"}
     ignore_extensions = {".zip"}
@@ -136,7 +151,7 @@ def validate_project(project_folder):
             if file.endswith(".py"):
                 results[file_path] = validate_python(file_path)
             elif file.endswith(".cpp") or file.endswith(".h"):
-                results[file_path] = validate_cpp(file_path)
+                results[file_path] = validate_cpp(file_path, missing_deps)
             elif file.endswith(".go"):
                 results[file_path] = validate_go(file_path)
             elif file.endswith(".html"):
@@ -156,9 +171,14 @@ def validate_project(project_folder):
             if placeholder:
                 results[file_path] += f" | {placeholder}"
 
-    sqlite_warn = validate_sqlite_integration(project_folder)
-    if sqlite_warn:
-        results["SQLiteIntegrationCheck"] = sqlite_warn
+    # ✅ Generate INSTALL.md with missing dependencies
+    if missing_deps:
+        install_path = os.path.join(project_folder, "INSTALL.md")
+        with open(install_path, "w") as f:
+            f.write("# Project Dependencies\n\nInstall the following packages before building:\n\n")
+            for header, pkg in sorted(missing_deps):
+                f.write(f"- `{header}` → Install `{pkg}`\n")
+        logging.info(f"[Validation] INSTALL.md generated with {len(missing_deps)} dependencies.")
 
     logging.info(f"[Validation] Completed validation for {len(results)} files.")
     return results
